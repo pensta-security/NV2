@@ -64,8 +64,9 @@ class NessusViewer(tk.Tk):
         ttk.Label(info_frame, text="Opened Nessus Files:").pack(
             anchor=tk.W, padx=5, pady=(5, 0)
         )
-        self.file_listbox = tk.Listbox(info_frame, height=5)
-        self.file_listbox.pack(fill=tk.X, padx=5, pady=5)
+        self.file_checkbox_frame = ttk.Frame(info_frame)
+        self.file_checkbox_frame.pack(fill=tk.X, padx=5, pady=5)
+        self.file_vars: Dict[str, tk.BooleanVar] = {}
 
         ttk.Label(info_frame, text="Open Ports:").pack(anchor=tk.W, padx=5)
         self.port_text = tk.Text(info_frame, height=5, wrap="word")
@@ -101,9 +102,20 @@ class NessusViewer(tk.Tk):
         self.detail_text.delete("1.0", tk.END)
 
         self.opened_files = [os.path.basename(p) for p in file_paths]
-        self.file_listbox.delete(0, tk.END)
+
+        for child in self.file_checkbox_frame.winfo_children():
+            child.destroy()
+        self.file_vars.clear()
         for name in self.opened_files:
-            self.file_listbox.insert(tk.END, name)
+            var = tk.BooleanVar(value=True)
+            cb = ttk.Checkbutton(
+                self.file_checkbox_frame,
+                text=name,
+                variable=var,
+                command=self.filter_issues,
+            )
+            cb.pack(anchor=tk.W)
+            self.file_vars[name] = var
 
         for path in file_paths:
             try:
@@ -119,20 +131,8 @@ class NessusViewer(tk.Tk):
                     issue = self._parse_report_item(report_item, host)
                     issue["file"] = os.path.basename(path)
                     self.issues.append(issue)
-                    port = issue["port"]
-                    if port:
-                        self.ports.add(port)
 
         self.filter_issues()
-
-        self.port_text.config(state=tk.NORMAL)
-        self.port_text.delete("1.0", tk.END)
-        if self.ports:
-            ports_sorted = ",".join(str(p) for p in sorted(self.ports))
-            self.port_text.insert(tk.END, ports_sorted)
-        else:
-            self.port_text.insert(tk.END, "None")
-        self.port_text.config(state=tk.DISABLED)
 
     def _refresh_issue_list(self) -> None:
         """Refresh the listbox with the current visible issues."""
@@ -145,22 +145,44 @@ class NessusViewer(tk.Tk):
             self.issue_list.insert(tk.END, display)
 
     def filter_issues(self, _event: Optional[tk.Event] = None) -> None:
-        """Filter issues based on the search entry."""
+        """Filter issues based on the search entry and selected files."""
         term = self.search_var.get().lower()
-        if not term:
-            self.visible_issues = list(self.issues)
-        else:
-            self.visible_issues = [
+        selected_files = [name for name, var in self.file_vars.items() if var.get()]
+
+        filtered = [
+            issue
+            for issue in self.issues
+            if (not selected_files or issue.get("file", "") in selected_files)
+        ]
+        if term:
+            filtered = [
                 issue
-                for issue in self.issues
-                if term in issue['host'].lower()
-                or term in issue['protocol'].lower()
-                or term in issue['severity'].lower()
-                or term in issue['plugin_name'].lower()
-                or term in str(issue['port'])
-                or term in issue.get('file', '').lower()
+                for issue in filtered
+                if term in issue["host"].lower()
+                or term in issue["protocol"].lower()
+                or term in issue["severity"].lower()
+                or term in issue["plugin_name"].lower()
+                or term in str(issue["port"])
+                or term in issue.get("file", "").lower()
             ]
+
+        self.visible_issues = filtered
         self._refresh_issue_list()
+
+        self.ports = {
+            issue["port"]
+            for issue in self.issues
+            if issue["port"]
+            and (not selected_files or issue.get("file", "") in selected_files)
+        }
+        self.port_text.config(state=tk.NORMAL)
+        self.port_text.delete("1.0", tk.END)
+        if self.ports:
+            ports_sorted = ",".join(str(p) for p in sorted(self.ports))
+            self.port_text.insert(tk.END, ports_sorted)
+        else:
+            self.port_text.insert(tk.END, "None")
+        self.port_text.config(state=tk.DISABLED)
 
     def clear_filter(self) -> None:
         """Clear the search filter and show all issues."""

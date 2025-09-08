@@ -1,8 +1,8 @@
 import os
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 import xml.etree.ElementTree as ET
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 
 class NessusViewer(tk.Tk):
@@ -18,8 +18,11 @@ class NessusViewer(tk.Tk):
         self.title("Nessus Viewer")
         self.geometry("1000x600")
 
-        self.issues: List[Dict[str, str]] = []
-        self.visible_issues: List[Dict[str, str]] = []
+        # Each issue dictionary may contain strings or lists depending on the
+        # data extracted from the Nessus file.  Use ``Any`` for the value type
+        # to accommodate list fields such as CVEs or other references.
+        self.issues: List[Dict[str, Any]] = []
+        self.visible_issues: List[Dict[str, Any]] = []
         self.ports: Set[int] = set()
         self.opened_files: List[str] = []
 
@@ -55,8 +58,19 @@ class NessusViewer(tk.Tk):
         detail_frame = ttk.Frame(records_frame)
         detail_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
+        # Text widget for long-form information such as descriptions and
+        # plugin output.
         self.detail_text = tk.Text(detail_frame, wrap="word")
         self.detail_text.pack(fill=tk.BOTH, expand=True)
+
+        # Table for references like CVE/BID/XREF that are easier to view in a
+        # structured format.
+        self.ref_tree = ttk.Treeview(
+            detail_frame, columns=("type", "value"), show="headings", height=5
+        )
+        self.ref_tree.heading("type", text="Type")
+        self.ref_tree.heading("value", text="Value")
+        self.ref_tree.pack(fill=tk.BOTH, expand=True)
 
         info_frame = ttk.Frame(notebook)
         notebook.add(info_frame, text="Files & Ports")
@@ -199,10 +213,18 @@ class NessusViewer(tk.Tk):
         self.clipboard_append(ports_sorted)
         messagebox.showinfo("Copied", "Open ports copied to clipboard.")
 
-    def _parse_report_item(self, item: ET.Element, host: str) -> Dict[str, str]:
+    def _parse_report_item(self, item: ET.Element, host: str) -> Dict[str, Any]:
         """Extract relevant information from a ReportItem."""
         port_str = item.get("port", "0")
         port = int(port_str) if port_str.isdigit() else 0
+
+        # Collect multi-valued elements.  ``findall`` returns an empty list if
+        # the tag does not exist which satisfies the requirement that missing
+        # data is handled gracefully.
+        cve_list = [e.text for e in item.findall("cve") if e.text]
+        bid_list = [e.text for e in item.findall("bid") if e.text]
+        xref_list = [e.text for e in item.findall("xref") if e.text]
+
         return {
             "host": host,
             "port": port,
@@ -212,6 +234,11 @@ class NessusViewer(tk.Tk):
             "plugin_name": item.get("pluginName", ""),
             "description": item.findtext("description", default=""),
             "solution": item.findtext("solution", default=""),
+            "plugin_output": item.findtext("plugin_output", default=""),
+            "risk_factor": item.findtext("risk_factor", default=""),
+            "cve": cve_list,
+            "bid": bid_list,
+            "xref": xref_list,
         }
 
     def show_details(self, _event: tk.Event) -> None:
@@ -220,18 +247,37 @@ class NessusViewer(tk.Tk):
         if not selection:
             return
         issue = self.visible_issues[selection[0]]
-        details = (
-            f"Host: {issue['host']}\n"
-            f"Port: {issue['port']}/{issue['protocol']}\n"
-            f"Severity: {issue['severity']}\n"
-            f"Plugin ID: {issue['plugin_id']}\n"
-            f"Plugin Name: {issue['plugin_name']}\n"
-            f"Source File: {issue.get('file', '')}\n\n"
-            f"Description:\n{issue['description']}\n\n"
-            f"Solution:\n{issue['solution']}\n"
-        )
+
+        # Build the textual portion of the details view.
+        details = [
+            f"Host: {issue['host']}",
+            f"Port: {issue['port']}/{issue['protocol']}",
+            f"Severity: {issue['severity']}",
+            f"Risk Factor: {issue.get('risk_factor', '')}",
+            f"Plugin ID: {issue['plugin_id']}",
+            f"Plugin Name: {issue['plugin_name']}",
+            f"Source File: {issue.get('file', '')}",
+            "",
+            f"Description:\n{issue['description']}",
+        ]
+
+        if issue.get("solution"):
+            details.append(f"\nSolution:\n{issue['solution']}")
+        if issue.get("plugin_output"):
+            details.append(f"\nPlugin Output:\n{issue['plugin_output']}")
+
         self.detail_text.delete("1.0", tk.END)
-        self.detail_text.insert(tk.END, details)
+        self.detail_text.insert(tk.END, "\n".join(details))
+
+        # Populate the reference table.
+        for row in self.ref_tree.get_children():
+            self.ref_tree.delete(row)
+        for ref in issue.get("cve", []):
+            self.ref_tree.insert("", tk.END, values=("CVE", ref))
+        for ref in issue.get("bid", []):
+            self.ref_tree.insert("", tk.END, values=("BID", ref))
+        for ref in issue.get("xref", []):
+            self.ref_tree.insert("", tk.END, values=("XREF", ref))
 
 
 if __name__ == "__main__":

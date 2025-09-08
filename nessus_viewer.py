@@ -356,7 +356,12 @@ class NessusViewer(tk.Tk):
         selection = self.issue_tree.selection()
         if not selection:
             return
-        index = int(selection[0])
+        # ``Treeview.selection`` returns item identifiers which may not be
+        # plain integers (for example, automatically generated IDs like
+        # ``I001``).  Use ``Treeview.index`` to translate the identifier into
+        # the corresponding position within the widget and map that to the
+        # ``visible_issues`` list.
+        index = self.issue_tree.index(selection[0])
         issue = self.visible_issues[index]
 
         # Build the textual portion of the details view.

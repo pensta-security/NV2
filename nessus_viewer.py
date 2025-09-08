@@ -168,9 +168,12 @@ class NessusViewer(tk.Tk):
     def _import_files(self, file_paths: Iterable[str]) -> None:
         """Parse Nessus files and append to current state."""
         file_paths = list(file_paths)
+        new_paths: List[str] = []
         for path in file_paths:
             name = os.path.basename(path)
             if name in self.opened_files:
+                # Skip files that have already been imported to avoid
+                # duplicate records when selecting a recent file multiple times.
                 continue
             self.opened_files.append(name)
             var = tk.BooleanVar(value=True)
@@ -179,8 +182,9 @@ class NessusViewer(tk.Tk):
             )
             cb.pack(anchor=tk.W)
             self.file_vars[name] = var
+            new_paths.append(path)
 
-        for path in file_paths:
+        for path in new_paths:
             try:
                 tree = ET.parse(path)
             except ET.ParseError as exc:
@@ -197,7 +201,7 @@ class NessusViewer(tk.Tk):
 
         self.filter_issues()
 
-        for path in file_paths:
+        for path in new_paths:
             if path in self.recent_files:
                 self.recent_files.remove(path)
             self.recent_files.insert(0, path)

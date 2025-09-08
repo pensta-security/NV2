@@ -1,3 +1,4 @@
+import json
 import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -63,9 +64,26 @@ class NessusViewer(tk.Tk):
         )
         # Track sort direction for issue columns
         self._sort_reverse: Dict[str, bool] = {}
+
+        # Column configuration
+        self.columns = ("host", "port", "protocol", "severity", "plugin", "file")
+        self.config_path = os.path.join(
+            os.path.expanduser("~"), ".nessus_viewer_config.json"
+        )
+        self.column_widths: Dict[str, int] = {
+            "host": 150,
+            "port": 70,
+            "protocol": 90,
+            "severity": 90,
+            "plugin": 300,
+            "file": 180,
+        }
+
         self._load_recent_files()
+        self._load_config()
 
         self._create_widgets()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _create_widgets(self) -> None:
         """Create and lay out widgets."""
@@ -103,10 +121,9 @@ class NessusViewer(tk.Tk):
             side=tk.LEFT, padx=5
         )
 
-        columns = ("host", "port", "protocol", "severity", "plugin", "file")
         self.issue_tree = ttk.Treeview(
             list_frame,
-            columns=columns,
+            columns=self.columns,
             show="headings",
             selectmode="extended",
         )
@@ -118,17 +135,24 @@ class NessusViewer(tk.Tk):
             "plugin": "Plugin Name",
             "file": "File",
         }
-        for col in columns:
+        for col in self.columns:
             self.issue_tree.heading(
                 col,
                 text=headings[col],
                 command=lambda c=col: self.sort_issues(c),
             )
-            self.issue_tree.column(col, stretch=True, width=100)
+            self.issue_tree.column(
+                col,
+                stretch=True,
+                width=self.column_widths.get(col, 100),
+            )
         for tag, color in SEVERITY_COLORS.items():
             self.issue_tree.tag_configure(tag, foreground=color)
         self.issue_tree.pack(fill=tk.BOTH, expand=True)
         self.issue_tree.bind("<Double-Button-1>", self.show_details)
+        self.issue_tree.bind(
+            "<ButtonRelease-1>", lambda _e: self._capture_column_widths()
+        )
 
         # Context menu for copying selected host/port pairs
         self.issue_menu = tk.Menu(self.issue_tree, tearoff=0)
@@ -183,7 +207,7 @@ class NessusViewer(tk.Tk):
         file_menu.add_cascade(label="Recent Files", menu=self.recent_menu)
         self._update_recent_files_menu()
         file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.quit)
+        file_menu.add_command(label="Exit", command=self._on_close)
 
     def open_files(self) -> None:
         """Open and parse one or more Nessus files."""
@@ -293,6 +317,41 @@ class NessusViewer(tk.Tk):
                 fh.write("\n".join(self.recent_files))
         except OSError:
             pass
+
+    def _capture_column_widths(self) -> None:
+        """Update in-memory column widths from the treeview."""
+        for col in self.columns:
+            try:
+                self.column_widths[col] = self.issue_tree.column(col)["width"]
+            except tk.TclError:
+                pass
+
+    def _load_config(self) -> None:
+        """Load persisted configuration such as column widths."""
+        try:
+            with open(self.config_path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            widths = data.get("column_widths", {})
+            for col, width in widths.items():
+                if isinstance(width, int):
+                    self.column_widths[col] = width
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    def _save_config(self) -> None:
+        """Persist configuration such as column widths to disk."""
+        data = {"column_widths": self.column_widths}
+        try:
+            with open(self.config_path, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+        except OSError:
+            pass
+
+    def _on_close(self) -> None:
+        """Handle application exit and persist configuration."""
+        self._capture_column_widths()
+        self._save_config()
+        self.destroy()
 
     def _refresh_issue_list(self) -> None:
         """Refresh the table with the current visible issues."""

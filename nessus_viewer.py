@@ -265,20 +265,43 @@ class NessusViewer(tk.Tk):
             self.file_vars[name] = var
             new_paths.append(path)
 
-        for path in new_paths:
-            try:
-                tree = ET.parse(path)
-            except ET.ParseError as exc:
-                messagebox.showerror("Parse error", f"Failed to parse {path}: {exc}")
-                continue
+        if new_paths:
+            progress_win = tk.Toplevel(self)
+            progress_win.title("Importing files")
+            progress_win.transient(self)
+            progress_win.grab_set()
+            ttk.Label(progress_win, text="Importing Nessus files...").pack(padx=10, pady=10)
+            progress = ttk.Progressbar(
+                progress_win, length=300, mode="determinate", maximum=len(new_paths)
+            )
+            progress.pack(padx=10, pady=(0, 10))
+            progress_win.update_idletasks()
 
-            root = tree.getroot()
-            for report_host in root.findall(".//ReportHost"):
-                host = report_host.get("name", "")
-                for report_item in report_host.findall("ReportItem"):
-                    issue = self._parse_report_item(report_item, host)
-                    issue["file"] = os.path.basename(path)
-                    self.issues.append(issue)
+            try:
+                for idx, path in enumerate(new_paths, start=1):
+                    try:
+                        tree = ET.parse(path)
+                    except ET.ParseError as exc:
+                        messagebox.showerror(
+                            "Parse error", f"Failed to parse {path}: {exc}"
+                        )
+                        progress["value"] = idx
+                        progress_win.update_idletasks()
+                        continue
+
+                    root = tree.getroot()
+                    for report_host in root.findall(".//ReportHost"):
+                        host = report_host.get("name", "")
+                        for report_item in report_host.findall("ReportItem"):
+                            issue = self._parse_report_item(report_item, host)
+                            issue["file"] = os.path.basename(path)
+                            self.issues.append(issue)
+
+                    progress["value"] = idx
+                    progress_win.update_idletasks()
+            finally:
+                progress_win.grab_release()
+                progress_win.destroy()
 
         self.filter_issues()
 

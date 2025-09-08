@@ -46,6 +46,11 @@ class NessusViewer(tk.Tk):
         self.port_label = ttk.Label(bottom_frame, text="Ports: ")
         self.port_label.pack(side=tk.LEFT, padx=5)
 
+        self.copy_button = ttk.Button(
+            bottom_frame, text="Copy Ports", command=self.copy_ports
+        )
+        self.copy_button.pack(side=tk.LEFT, padx=5)
+
         menu = tk.Menu(self)
         self.config(menu=menu)
         file_menu = tk.Menu(menu, tearoff=0)
@@ -96,6 +101,16 @@ class NessusViewer(tk.Tk):
             self.port_label.config(text=f"Ports: {ports_sorted}")
         else:
             self.port_label.config(text="Ports: None")
+
+    def copy_ports(self) -> None:
+        """Copy the comma-separated list of open ports to the clipboard."""
+        if not self.ports:
+            messagebox.showwarning("No Ports", "No open ports to copy.")
+            return
+        ports_sorted = ",".join(str(p) for p in sorted(self.ports))
+        self.clipboard_clear()
+        self.clipboard_append(ports_sorted)
+        messagebox.showinfo("Copied", "Open ports copied to clipboard.")
 
     def _parse_report_item(self, item: ET.Element, host: str) -> Dict[str, str]:
         """Extract relevant information from a ReportItem."""

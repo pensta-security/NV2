@@ -29,6 +29,8 @@ class NessusViewer(tk.Tk):
         self.recent_files_path = os.path.join(
             os.path.expanduser("~"), ".nessus_viewer_recent"
         )
+        # Track sort direction for issue columns
+        self._sort_reverse: Dict[str, bool] = {}
         self._load_recent_files()
 
         self._create_widgets()
@@ -56,9 +58,27 @@ class NessusViewer(tk.Tk):
             side=tk.LEFT, padx=5
         )
 
-        self.issue_list = tk.Listbox(list_frame)
-        self.issue_list.pack(fill=tk.BOTH, expand=True)
-        self.issue_list.bind("<Double-Button-1>", self.show_details)
+        columns = ("host", "port", "protocol", "severity", "plugin", "file")
+        self.issue_tree = ttk.Treeview(
+            list_frame, columns=columns, show="headings"
+        )
+        headings = {
+            "host": "Host",
+            "port": "Port",
+            "protocol": "Protocol",
+            "severity": "Severity",
+            "plugin": "Plugin Name",
+            "file": "File",
+        }
+        for col in columns:
+            self.issue_tree.heading(
+                col,
+                text=headings[col],
+                command=lambda c=col: self.sort_issues(c),
+            )
+            self.issue_tree.column(col, stretch=True, width=100)
+        self.issue_tree.pack(fill=tk.BOTH, expand=True)
+        self.issue_tree.bind("<Double-Button-1>", self.show_details)
 
         detail_frame = ttk.Frame(records_frame)
         detail_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
@@ -138,7 +158,7 @@ class NessusViewer(tk.Tk):
         self.issues.clear()
         self.visible_issues.clear()
         self.ports.clear()
-        self.issue_list.delete(0, tk.END)
+        self.issue_tree.delete(*self.issue_tree.get_children())
         self.detail_text.delete("1.0", tk.END)
         self.opened_files = []
         for child in self.file_checkbox_frame.winfo_children():
@@ -214,14 +234,35 @@ class NessusViewer(tk.Tk):
             pass
 
     def _refresh_issue_list(self) -> None:
-        """Refresh the listbox with the current visible issues."""
-        self.issue_list.delete(0, tk.END)
-        for issue in self.visible_issues:
-            display = (
-                f"{issue['host']}:{issue['port']}/{issue['protocol']} - "
-                f"{issue['plugin_name']} (Severity {issue['severity']})"
+        """Refresh the table with the current visible issues."""
+        self.issue_tree.delete(*self.issue_tree.get_children())
+        for idx, issue in enumerate(self.visible_issues):
+            self.issue_tree.insert(
+                "",
+                tk.END,
+                iid=str(idx),
+                values=(
+                    issue["host"],
+                    issue["port"],
+                    issue["protocol"],
+                    issue["severity"],
+                    issue["plugin_name"],
+                    issue.get("file", ""),
+                ),
             )
-            self.issue_list.insert(tk.END, display)
+
+    def sort_issues(self, column: str) -> None:
+        """Sort the visible issues by the given column."""
+        reverse = self._sort_reverse.get(column, False)
+        if column in {"port", "severity"}:
+            key_func = lambda i: int(i.get(column, 0))
+        elif column == "plugin":
+            key_func = lambda i: i.get("plugin_name", "").lower()
+        else:
+            key_func = lambda i: str(i.get(column, "")).lower()
+        self.visible_issues.sort(key=key_func, reverse=reverse)
+        self._sort_reverse[column] = not reverse
+        self._refresh_issue_list()
 
     def filter_issues(self, _event: Optional[tk.Event] = None) -> None:
         """Filter issues based on the search entry and selected files."""
@@ -308,10 +349,11 @@ class NessusViewer(tk.Tk):
 
     def show_details(self, _event: tk.Event) -> None:
         """Display details of the selected issue."""
-        selection = self.issue_list.curselection()
+        selection = self.issue_tree.selection()
         if not selection:
             return
-        issue = self.visible_issues[selection[0]]
+        index = int(selection[0])
+        issue = self.visible_issues[index]
 
         # Build the textual portion of the details view.
         details = [

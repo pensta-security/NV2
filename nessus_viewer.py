@@ -2,7 +2,7 @@ import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import xml.etree.ElementTree as ET
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set
 
 
 class NessusViewer(tk.Tk):
@@ -25,6 +25,11 @@ class NessusViewer(tk.Tk):
         self.visible_issues: List[Dict[str, Any]] = []
         self.ports: Set[int] = set()
         self.opened_files: List[str] = []
+        self.recent_files: List[str] = []
+        self.recent_files_path = os.path.join(
+            os.path.expanduser("~"), ".nessus_viewer_recent"
+        )
+        self._load_recent_files()
 
         self._create_widgets()
 
@@ -97,6 +102,9 @@ class NessusViewer(tk.Tk):
         file_menu = tk.Menu(menu, tearoff=0)
         menu.add_cascade(label="File", menu=file_menu)
         file_menu.add_command(label="Open Nessus Files", command=self.open_files)
+        self.recent_menu = tk.Menu(file_menu, tearoff=0)
+        file_menu.add_cascade(label="Recent Files", menu=self.recent_menu)
+        self._update_recent_files_menu()
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self.quit)
 
@@ -106,9 +114,23 @@ class NessusViewer(tk.Tk):
             title="Open Nessus files",
             filetypes=[("Nessus files", "*.nessus"), ("All files", "*.*")],
         )
-        if not file_paths:
-            return
+        if file_paths:
+            self._load_files(file_paths)
 
+    def open_recent_file(self, path: str) -> None:
+        """Open a Nessus file from the recent files list."""
+        if not os.path.exists(path):
+            messagebox.showerror("File not found", f"{path} not found")
+            if path in self.recent_files:
+                self.recent_files.remove(path)
+                self._save_recent_files()
+                self._update_recent_files_menu()
+            return
+        self._load_files([path])
+
+    def _load_files(self, file_paths: Iterable[str]) -> None:
+        """Internal helper to parse Nessus files and update state."""
+        file_paths = list(file_paths)
         self.issues.clear()
         self.visible_issues.clear()
         self.ports.clear()
@@ -123,10 +145,7 @@ class NessusViewer(tk.Tk):
         for name in self.opened_files:
             var = tk.BooleanVar(value=True)
             cb = ttk.Checkbutton(
-                self.file_checkbox_frame,
-                text=name,
-                variable=var,
-                command=self.filter_issues,
+                self.file_checkbox_frame, text=name, variable=var, command=self.filter_issues
             )
             cb.pack(anchor=tk.W)
             self.file_vars[name] = var
@@ -147,6 +166,42 @@ class NessusViewer(tk.Tk):
                     self.issues.append(issue)
 
         self.filter_issues()
+
+        for path in file_paths:
+            if path in self.recent_files:
+                self.recent_files.remove(path)
+            self.recent_files.insert(0, path)
+        self.recent_files = self.recent_files[:10]
+        self._save_recent_files()
+        self._update_recent_files_menu()
+
+    def _update_recent_files_menu(self) -> None:
+        """Refresh the Recent Files submenu."""
+        self.recent_menu.delete(0, tk.END)
+        if not self.recent_files:
+            self.recent_menu.add_command(label="(No recent files)", state=tk.DISABLED)
+            return
+        for path in self.recent_files:
+            self.recent_menu.add_command(
+                label=os.path.basename(path),
+                command=lambda p=path: self.open_recent_file(p),
+            )
+
+    def _load_recent_files(self) -> None:
+        """Load recent files list from disk."""
+        try:
+            with open(self.recent_files_path, "r", encoding="utf-8") as fh:
+                self.recent_files = [line.strip() for line in fh if line.strip()]
+        except OSError:
+            self.recent_files = []
+
+    def _save_recent_files(self) -> None:
+        """Persist recent files list to disk."""
+        try:
+            with open(self.recent_files_path, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(self.recent_files))
+        except OSError:
+            pass
 
     def _refresh_issue_list(self) -> None:
         """Refresh the listbox with the current visible issues."""

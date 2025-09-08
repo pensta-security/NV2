@@ -8,6 +8,8 @@ Utilities for analyzing vulnerability reports.
 Nessus (`.nessus`) files:
 
 - Open files via **File > Open Nessus Files**.
+- Quickly reopen previous files through **File > Recent Files**, which keeps
+  the last ten entries.
 - The left pane lists discovered issues. Double-click an entry to view
   detailed information.
 - A search box above the list filters issues by any text, including host,

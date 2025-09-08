@@ -13,6 +13,8 @@ Nessus (`.nessus`) files:
   the current view.
 - The left pane lists discovered issues. Double-click an entry to view
   detailed information.
+- Select one or more issues and right-click to copy their host:port pairs to
+  the clipboard, one per line.
 - A search box above the list filters issues by any text, including host,
   plugin name, severity, or source file.
 - The bottom of the window shows which Nessus files were opened and all unique

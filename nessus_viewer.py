@@ -118,7 +118,7 @@ class NessusViewer(tk.Tk):
             self._load_files(file_paths)
 
     def open_recent_file(self, path: str) -> None:
-        """Open a Nessus file from the recent files list."""
+        """Import a Nessus file from the recent files list."""
         if not os.path.exists(path):
             messagebox.showerror("File not found", f"{path} not found")
             if path in self.recent_files:
@@ -126,23 +126,33 @@ class NessusViewer(tk.Tk):
                 self._save_recent_files()
                 self._update_recent_files_menu()
             return
-        self._load_files([path])
+        self._import_files([path])
 
     def _load_files(self, file_paths: Iterable[str]) -> None:
-        """Internal helper to parse Nessus files and update state."""
-        file_paths = list(file_paths)
+        """Replace current data with the given Nessus files."""
+        self._clear_data()
+        self._import_files(file_paths)
+
+    def _clear_data(self) -> None:
+        """Remove all currently loaded issues and related state."""
         self.issues.clear()
         self.visible_issues.clear()
         self.ports.clear()
         self.issue_list.delete(0, tk.END)
         self.detail_text.delete("1.0", tk.END)
-
-        self.opened_files = [os.path.basename(p) for p in file_paths]
-
+        self.opened_files = []
         for child in self.file_checkbox_frame.winfo_children():
             child.destroy()
         self.file_vars.clear()
-        for name in self.opened_files:
+
+    def _import_files(self, file_paths: Iterable[str]) -> None:
+        """Parse Nessus files and append to current state."""
+        file_paths = list(file_paths)
+        for path in file_paths:
+            name = os.path.basename(path)
+            if name in self.opened_files:
+                continue
+            self.opened_files.append(name)
             var = tk.BooleanVar(value=True)
             cb = ttk.Checkbutton(
                 self.file_checkbox_frame, text=name, variable=var, command=self.filter_issues

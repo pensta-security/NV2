@@ -5,6 +5,25 @@ import xml.etree.ElementTree as ET
 from typing import Any, Dict, Iterable, List, Optional, Set
 
 
+# Mapping of numeric severity levels to tag names used for styling rows.
+SEVERITY_TAGS = {
+    "0": "info",
+    "1": "low",
+    "2": "medium",
+    "3": "high",
+    "4": "critical",
+}
+
+# Colors chosen for contrast on light and dark themes.
+SEVERITY_COLORS = {
+    "critical": "#d32f2f",  # red
+    "high": "#f57c00",      # orange
+    "medium": "#fbc02d",    # yellow
+    "low": "#388e3c",       # green
+    "info": "#1976d2",      # blue
+}
+
+
 class NessusViewer(tk.Tk):
     """Tkinter GUI for viewing one or more Nessus (.nessus) files.
 
@@ -80,6 +99,8 @@ class NessusViewer(tk.Tk):
                 command=lambda c=col: self.sort_issues(c),
             )
             self.issue_tree.column(col, stretch=True, width=100)
+        for tag, color in SEVERITY_COLORS.items():
+            self.issue_tree.tag_configure(tag, foreground=color)
         self.issue_tree.pack(fill=tk.BOTH, expand=True)
         self.issue_tree.bind("<Double-Button-1>", self.show_details)
 
@@ -251,10 +272,12 @@ class NessusViewer(tk.Tk):
         """Refresh the table with the current visible issues."""
         self.issue_tree.delete(*self.issue_tree.get_children())
         for idx, issue in enumerate(self.visible_issues):
+            tag = SEVERITY_TAGS.get(str(issue.get("severity", "")), "")
             self.issue_tree.insert(
                 "",
                 tk.END,
                 iid=str(idx),
+                tags=(tag,) if tag else (),
                 values=(
                     issue["host"],
                     issue["port"],

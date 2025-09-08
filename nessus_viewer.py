@@ -9,8 +9,8 @@ class NessusViewer(tk.Tk):
     """Tkinter GUI for viewing one or more Nessus (.nessus) files.
 
     The interface presents a list of discovered issues. Double clicking an issue
-    displays full details. A comma-separated list of unique open TCP/UDP ports is
-    shown at the bottom of the window.
+    displays full details. Opened Nessus files and a comma-separated list of
+    unique open TCP/UDP ports are available in a separate tab.
     """
 
     def __init__(self) -> None:
@@ -27,10 +27,13 @@ class NessusViewer(tk.Tk):
 
     def _create_widgets(self) -> None:
         """Create and lay out widgets."""
-        top_frame = ttk.Frame(self)
-        top_frame.pack(fill=tk.BOTH, expand=True)
+        notebook = ttk.Notebook(self)
+        notebook.pack(fill=tk.BOTH, expand=True)
 
-        list_frame = ttk.Frame(top_frame)
+        records_frame = ttk.Frame(notebook)
+        notebook.add(records_frame, text="Records")
+
+        list_frame = ttk.Frame(records_frame)
         list_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         search_frame = ttk.Frame(list_frame)
@@ -49,25 +52,30 @@ class NessusViewer(tk.Tk):
         self.issue_list.pack(fill=tk.BOTH, expand=True)
         self.issue_list.bind("<Double-Button-1>", self.show_details)
 
-        detail_frame = ttk.Frame(top_frame)
+        detail_frame = ttk.Frame(records_frame)
         detail_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
         self.detail_text = tk.Text(detail_frame, wrap="word")
         self.detail_text.pack(fill=tk.BOTH, expand=True)
 
-        bottom_frame = ttk.Frame(self)
-        bottom_frame.pack(fill=tk.X)
+        info_frame = ttk.Frame(notebook)
+        notebook.add(info_frame, text="Files & Ports")
 
-        self.file_label = ttk.Label(bottom_frame, text="Files: None")
-        self.file_label.pack(side=tk.LEFT, padx=5)
+        ttk.Label(info_frame, text="Opened Nessus Files:").pack(
+            anchor=tk.W, padx=5, pady=(5, 0)
+        )
+        self.file_listbox = tk.Listbox(info_frame, height=5)
+        self.file_listbox.pack(fill=tk.X, padx=5, pady=5)
 
-        self.port_label = ttk.Label(bottom_frame, text="Ports: None")
-        self.port_label.pack(side=tk.LEFT, padx=5)
+        ttk.Label(info_frame, text="Open Ports:").pack(anchor=tk.W, padx=5)
+        self.port_text = tk.Text(info_frame, height=5, wrap="word")
+        self.port_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
+        self.port_text.config(state=tk.DISABLED)
 
         self.copy_button = ttk.Button(
-            bottom_frame, text="Copy Ports", command=self.copy_ports
+            info_frame, text="Copy Ports", command=self.copy_ports
         )
-        self.copy_button.pack(side=tk.LEFT, padx=5)
+        self.copy_button.pack(anchor=tk.W, padx=5, pady=(0, 5))
 
         menu = tk.Menu(self)
         self.config(menu=menu)
@@ -93,7 +101,9 @@ class NessusViewer(tk.Tk):
         self.detail_text.delete("1.0", tk.END)
 
         self.opened_files = [os.path.basename(p) for p in file_paths]
-        self.file_label.config(text=f"Files: {', '.join(self.opened_files)}")
+        self.file_listbox.delete(0, tk.END)
+        for name in self.opened_files:
+            self.file_listbox.insert(tk.END, name)
 
         for path in file_paths:
             try:
@@ -115,11 +125,14 @@ class NessusViewer(tk.Tk):
 
         self.filter_issues()
 
+        self.port_text.config(state=tk.NORMAL)
+        self.port_text.delete("1.0", tk.END)
         if self.ports:
             ports_sorted = ",".join(str(p) for p in sorted(self.ports))
-            self.port_label.config(text=f"Ports: {ports_sorted}")
+            self.port_text.insert(tk.END, ports_sorted)
         else:
-            self.port_label.config(text="Ports: None")
+            self.port_text.insert(tk.END, "None")
+        self.port_text.config(state=tk.DISABLED)
 
     def _refresh_issue_list(self) -> None:
         """Refresh the listbox with the current visible issues."""

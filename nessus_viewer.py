@@ -1,7 +1,8 @@
+import os
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import xml.etree.ElementTree as ET
-from typing import List, Dict, Set
+from typing import Dict, List, Optional, Set
 
 
 class NessusViewer(tk.Tk):
@@ -18,7 +19,9 @@ class NessusViewer(tk.Tk):
         self.geometry("1000x600")
 
         self.issues: List[Dict[str, str]] = []
+        self.visible_issues: List[Dict[str, str]] = []
         self.ports: Set[int] = set()
+        self.opened_files: List[str] = []
 
         self._create_widgets()
 
@@ -29,6 +32,18 @@ class NessusViewer(tk.Tk):
 
         list_frame = ttk.Frame(top_frame)
         list_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        search_frame = ttk.Frame(list_frame)
+        search_frame.pack(fill=tk.X)
+
+        ttk.Label(search_frame, text="Search:").pack(side=tk.LEFT, padx=5)
+        self.search_var = tk.StringVar()
+        search_entry = ttk.Entry(search_frame, textvariable=self.search_var)
+        search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        search_entry.bind("<KeyRelease>", self.filter_issues)
+        ttk.Button(search_frame, text="Clear", command=self.clear_filter).pack(
+            side=tk.LEFT, padx=5
+        )
 
         self.issue_list = tk.Listbox(list_frame)
         self.issue_list.pack(fill=tk.BOTH, expand=True)
@@ -43,7 +58,10 @@ class NessusViewer(tk.Tk):
         bottom_frame = ttk.Frame(self)
         bottom_frame.pack(fill=tk.X)
 
-        self.port_label = ttk.Label(bottom_frame, text="Ports: ")
+        self.file_label = ttk.Label(bottom_frame, text="Files: None")
+        self.file_label.pack(side=tk.LEFT, padx=5)
+
+        self.port_label = ttk.Label(bottom_frame, text="Ports: None")
         self.port_label.pack(side=tk.LEFT, padx=5)
 
         self.copy_button = ttk.Button(
@@ -69,9 +87,13 @@ class NessusViewer(tk.Tk):
             return
 
         self.issues.clear()
+        self.visible_issues.clear()
         self.ports.clear()
         self.issue_list.delete(0, tk.END)
         self.detail_text.delete("1.0", tk.END)
+
+        self.opened_files = [os.path.basename(p) for p in file_paths]
+        self.file_label.config(text=f"Files: {', '.join(self.opened_files)}")
 
         for path in file_paths:
             try:
@@ -85,22 +107,52 @@ class NessusViewer(tk.Tk):
                 host = report_host.get("name", "")
                 for report_item in report_host.findall("ReportItem"):
                     issue = self._parse_report_item(report_item, host)
+                    issue["file"] = os.path.basename(path)
                     self.issues.append(issue)
-                    display = (
-                        f"{issue['host']}:{issue['port']}/{issue['protocol']} - "
-                        f"{issue['plugin_name']} (Severity {issue['severity']})"
-                    )
-                    self.issue_list.insert(tk.END, display)
-
                     port = issue["port"]
                     if port:
                         self.ports.add(port)
+
+        self.filter_issues()
 
         if self.ports:
             ports_sorted = ",".join(str(p) for p in sorted(self.ports))
             self.port_label.config(text=f"Ports: {ports_sorted}")
         else:
             self.port_label.config(text="Ports: None")
+
+    def _refresh_issue_list(self) -> None:
+        """Refresh the listbox with the current visible issues."""
+        self.issue_list.delete(0, tk.END)
+        for issue in self.visible_issues:
+            display = (
+                f"{issue['host']}:{issue['port']}/{issue['protocol']} - "
+                f"{issue['plugin_name']} (Severity {issue['severity']})"
+            )
+            self.issue_list.insert(tk.END, display)
+
+    def filter_issues(self, _event: Optional[tk.Event] = None) -> None:
+        """Filter issues based on the search entry."""
+        term = self.search_var.get().lower()
+        if not term:
+            self.visible_issues = list(self.issues)
+        else:
+            self.visible_issues = [
+                issue
+                for issue in self.issues
+                if term in issue['host'].lower()
+                or term in issue['protocol'].lower()
+                or term in issue['severity'].lower()
+                or term in issue['plugin_name'].lower()
+                or term in str(issue['port'])
+                or term in issue.get('file', '').lower()
+            ]
+        self._refresh_issue_list()
+
+    def clear_filter(self) -> None:
+        """Clear the search filter and show all issues."""
+        self.search_var.set("")
+        self.filter_issues()
 
     def copy_ports(self) -> None:
         """Copy the comma-separated list of open ports to the clipboard."""
@@ -132,13 +184,14 @@ class NessusViewer(tk.Tk):
         selection = self.issue_list.curselection()
         if not selection:
             return
-        issue = self.issues[selection[0]]
+        issue = self.visible_issues[selection[0]]
         details = (
             f"Host: {issue['host']}\n"
             f"Port: {issue['port']}/{issue['protocol']}\n"
             f"Severity: {issue['severity']}\n"
             f"Plugin ID: {issue['plugin_id']}\n"
-            f"Plugin Name: {issue['plugin_name']}\n\n"
+            f"Plugin Name: {issue['plugin_name']}\n"
+            f"Source File: {issue.get('file', '')}\n\n"
             f"Description:\n{issue['description']}\n\n"
             f"Solution:\n{issue['solution']}\n"
         )

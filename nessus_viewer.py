@@ -60,7 +60,10 @@ class NessusViewer(tk.Tk):
 
         columns = ("host", "port", "protocol", "severity", "plugin", "file")
         self.issue_tree = ttk.Treeview(
-            list_frame, columns=columns, show="headings"
+            list_frame,
+            columns=columns,
+            show="headings",
+            selectmode="extended",
         )
         headings = {
             "host": "Host",
@@ -79,6 +82,13 @@ class NessusViewer(tk.Tk):
             self.issue_tree.column(col, stretch=True, width=100)
         self.issue_tree.pack(fill=tk.BOTH, expand=True)
         self.issue_tree.bind("<Double-Button-1>", self.show_details)
+
+        # Context menu for copying selected host/port pairs
+        self.issue_menu = tk.Menu(self.issue_tree, tearoff=0)
+        self.issue_menu.add_command(
+            label="Copy Hosts and Ports", command=self.copy_selected_hosts_ports
+        )
+        self.issue_tree.bind("<Button-3>", self._show_issue_menu)
 
         detail_frame = ttk.Frame(records_frame)
         detail_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
@@ -312,6 +322,33 @@ class NessusViewer(tk.Tk):
         """Clear the search filter and show all issues."""
         self.search_var.set("")
         self.filter_issues()
+
+    def _show_issue_menu(self, event: tk.Event) -> None:
+        """Display the context menu for the issue list."""
+        item = self.issue_tree.identify_row(event.y)
+        if item:
+            if item not in self.issue_tree.selection():
+                self.issue_tree.selection_set(item)
+        try:
+            self.issue_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.issue_menu.grab_release()
+
+    def copy_selected_hosts_ports(self) -> None:
+        """Copy selected host:port pairs to the clipboard."""
+        selection = self.issue_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "No issues selected.")
+            return
+        lines = []
+        for item in selection:
+            index = self.issue_tree.index(item)
+            issue = self.visible_issues[index]
+            lines.append(f"{issue['host']}:{issue['port']}")
+        data = "\n".join(lines)
+        self.clipboard_clear()
+        self.clipboard_append(data)
+        messagebox.showinfo("Copied", "Hosts and ports copied to clipboard.")
 
     def copy_ports(self) -> None:
         """Copy the comma-separated list of open ports to the clipboard."""

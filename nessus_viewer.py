@@ -23,6 +23,19 @@ SEVERITY_COLORS = {
     "info": "#1976d2",      # blue
 }
 
+# Human readable names for severity levels used by the filter combobox.
+SEVERITY_NAMES = {
+    "0": "Info",
+    "1": "Low",
+    "2": "Medium",
+    "3": "High",
+    "4": "Critical",
+}
+# Map from displayed name back to numeric value.
+SEVERITY_NAME_TO_VALUE = {v: k for k, v in SEVERITY_NAMES.items()}
+# Options presented in the severity filter including the default.
+SEVERITY_FILTER_OPTIONS = ["All severities"] + list(SEVERITY_NAMES.values())
+
 
 class NessusViewer(tk.Tk):
     """Tkinter GUI for viewing one or more Nessus (.nessus) files.
@@ -73,6 +86,19 @@ class NessusViewer(tk.Tk):
         search_entry = ttk.Entry(search_frame, textvariable=self.search_var)
         search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
         search_entry.bind("<KeyRelease>", self.filter_issues)
+
+        ttk.Label(search_frame, text="Severity:").pack(side=tk.LEFT, padx=5)
+        self.severity_var = tk.StringVar(value="All severities")
+        severity_combo = ttk.Combobox(
+            search_frame,
+            textvariable=self.severity_var,
+            values=SEVERITY_FILTER_OPTIONS,
+            state="readonly",
+            width=15,
+        )
+        severity_combo.pack(side=tk.LEFT, padx=5)
+        severity_combo.bind("<<ComboboxSelected>>", self.filter_issues)
+
         ttk.Button(search_frame, text="Clear", command=self.clear_filter).pack(
             side=tk.LEFT, padx=5
         )
@@ -302,15 +328,23 @@ class NessusViewer(tk.Tk):
         self._refresh_issue_list()
 
     def filter_issues(self, _event: Optional[tk.Event] = None) -> None:
-        """Filter issues based on the search entry and selected files."""
+        """Filter issues based on the search entry, selected files and severity."""
         term = self.search_var.get().lower()
         selected_files = [name for name, var in self.file_vars.items() if var.get()]
+        selected_severity = self.severity_var.get()
 
         filtered = [
             issue
             for issue in self.issues
             if (not selected_files or issue.get("file", "") in selected_files)
         ]
+        if selected_severity != "All severities":
+            sev_value = SEVERITY_NAME_TO_VALUE.get(selected_severity)
+            filtered = [
+                issue
+                for issue in filtered
+                if issue.get("severity") == sev_value
+            ]
         if term:
             filtered = [
                 issue
@@ -342,8 +376,9 @@ class NessusViewer(tk.Tk):
         self.port_text.config(state=tk.DISABLED)
 
     def clear_filter(self) -> None:
-        """Clear the search filter and show all issues."""
+        """Clear the search and severity filters and show all issues."""
         self.search_var.set("")
+        self.severity_var.set("All severities")
         self.filter_issues()
 
     def _show_issue_menu(self, event: tk.Event) -> None:

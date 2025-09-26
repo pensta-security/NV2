@@ -65,9 +65,12 @@ class NessusViewer(tk.Tk):
         # Track sort direction for issue columns
         self._sort_reverse: Dict[str, bool] = {}
 
-        # Script builder state stores host/port pairings.
+        # Script builder state stores host/port pairings and reusable templates.
         self.script_entries: List[Tuple[Optional[str], Optional[int]]] = []
         self._script_entry_set: Set[Tuple[Optional[str], Optional[int]]] = set()
+        self.script_templates: Dict[str, str] = {
+            "TestSSL": "testssl.sh --ip <host> --port <port>"
+        }
 
         # Column configuration
         self.columns = ("host", "port", "protocol", "severity", "plugin", "file")
@@ -421,12 +424,21 @@ class NessusViewer(tk.Tk):
             for col, width in widths.items():
                 if isinstance(width, int):
                     self.column_widths[col] = width
+
+            templates = data.get("script_templates", {})
+            if isinstance(templates, dict):
+                for name, template in templates.items():
+                    if isinstance(name, str) and isinstance(template, str):
+                        self.script_templates[name] = template
         except (OSError, json.JSONDecodeError):
             pass
 
     def _save_config(self) -> None:
         """Persist configuration such as column widths to disk."""
-        data = {"column_widths": self.column_widths}
+        data = {
+            "column_widths": self.column_widths,
+            "script_templates": self.script_templates,
+        }
         try:
             with open(self.config_path, "w", encoding="utf-8") as fh:
                 json.dump(data, fh)
@@ -619,12 +631,46 @@ class NessusViewer(tk.Tk):
 
         template_frame = ttk.LabelFrame(parent, text="Command Template")
         template_frame.pack(fill=tk.BOTH, expand=False, padx=5, pady=(0, 5))
+        selection_frame = ttk.Frame(template_frame)
+        selection_frame.pack(fill=tk.X, padx=5, pady=(5, 0))
+        ttk.Label(selection_frame, text="Saved Templates:").pack(
+            side=tk.LEFT, padx=(0, 5)
+        )
+        self.selected_template_var = tk.StringVar(value="Custom")
+        self.template_selector = ttk.Combobox(
+            selection_frame,
+            textvariable=self.selected_template_var,
+            state="readonly",
+            width=25,
+        )
+        self.template_selector.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.template_selector.bind(
+            "<<ComboboxSelected>>", self._on_script_template_selected
+        )
+        ttk.Button(
+            selection_frame,
+            text="Load",
+            command=self._on_script_template_selected,
+        ).pack(side=tk.LEFT, padx=(5, 0))
+
         ttk.Label(
             template_frame,
             text="Use <host> and <port> placeholders to build commands.",
         ).pack(anchor=tk.W, padx=5, pady=(5, 0))
         self.script_template_text = tk.Text(template_frame, height=5, wrap="word")
         self.script_template_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        save_frame = ttk.Frame(template_frame)
+        save_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+        ttk.Label(save_frame, text="Template Name:").pack(side=tk.LEFT)
+        self.new_template_name_var = tk.StringVar()
+        name_entry = ttk.Entry(save_frame, textvariable=self.new_template_name_var, width=20)
+        name_entry.pack(side=tk.LEFT, padx=(5, 5), fill=tk.X, expand=True)
+        ttk.Button(
+            save_frame,
+            text="Save Template",
+            command=self.save_script_template,
+        ).pack(side=tk.LEFT)
 
         action_frame = ttk.Frame(parent)
         action_frame.pack(fill=tk.X, padx=5)
@@ -644,6 +690,8 @@ class NessusViewer(tk.Tk):
         self.script_output_text = tk.Text(output_frame, height=10, wrap="word")
         self.script_output_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         self.script_output_text.config(state=tk.DISABLED)
+
+        self._update_template_combobox()
 
     def _update_script_builder_lists(self) -> None:
         """Refresh the host/port table and button states."""
@@ -788,6 +836,65 @@ class NessusViewer(tk.Tk):
         self.script_output_text.insert(tk.END, script_output)
         self.script_output_text.config(state=tk.DISABLED)
         self.copy_script_button.state(["!disabled"])
+
+    def _update_template_combobox(self) -> None:
+        """Refresh the saved template selector with current templates."""
+
+        if not hasattr(self, "template_selector"):
+            return
+        options = ["Custom"] + sorted(self.script_templates)
+        self.template_selector["values"] = options
+        if self.selected_template_var.get() not in options:
+            self.selected_template_var.set("Custom")
+
+    def _on_script_template_selected(self, _event: Optional[tk.Event] = None) -> None:
+        """Load the selected template into the editor."""
+
+        choice = self.selected_template_var.get()
+        if choice == "Custom":
+            return
+        template = self.script_templates.get(choice, "")
+        self.script_template_text.delete("1.0", tk.END)
+        self.script_template_text.insert(tk.END, template)
+        self.new_template_name_var.set(choice)
+
+    def save_script_template(self) -> None:
+        """Save the current template to the library for future use."""
+
+        name = self.new_template_name_var.get().strip()
+        if not name:
+            messagebox.showwarning(
+                "Missing Name", "Enter a name before saving the template."
+            )
+            return
+        if name == "Custom":
+            messagebox.showwarning(
+                "Reserved Name",
+                "Choose a different name; 'Custom' is reserved for unsaved templates.",
+            )
+            return
+
+        template = self.script_template_text.get("1.0", tk.END).strip()
+        if not template:
+            messagebox.showwarning(
+                "Missing Template",
+                "Enter a command template before saving.",
+            )
+            return
+
+        if name in self.script_templates:
+            overwrite = messagebox.askyesno(
+                "Overwrite Template",
+                f"A template named '{name}' already exists. Overwrite it?",
+            )
+            if not overwrite:
+                return
+
+        self.script_templates[name] = template
+        self.selected_template_var.set(name)
+        self._update_template_combobox()
+        self._save_config()
+        messagebox.showinfo("Template Saved", f"Template '{name}' saved for future use.")
 
     def copy_script_output(self) -> None:
         """Copy the generated script to the clipboard."""

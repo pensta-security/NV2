@@ -110,6 +110,11 @@ class NessusViewer(tk.Tk):
         self.file_script_template_text: Optional[tk.Text] = None
         self.file_script_output_text: Optional[tk.Text] = None
         self.file_script_copy_button: Optional[ttk.Button] = None
+        self.file_script_templates: Dict[str, Dict[str, str]] = {}
+        self.file_selected_template_var = tk.StringVar(value="Custom")
+        self.file_new_template_name_var = tk.StringVar()
+        self.file_template_selector: Optional[ttk.Combobox] = None
+        self.file_delete_template_button: Optional[ttk.Button] = None
 
         # Column configuration
         self.columns = ("host", "port", "protocol", "severity", "plugin", "file")
@@ -719,6 +724,24 @@ class NessusViewer(tk.Tk):
                         if isinstance(name, str) and isinstance(template, str):
                             loaded_templates[name] = template
                     self.script_templates = loaded_templates
+
+            file_templates = data.get("file_script_templates", {})
+            if isinstance(file_templates, dict):
+                loaded_file_templates: Dict[str, Dict[str, str]] = {}
+                for name, info in file_templates.items():
+                    if not isinstance(name, str):
+                        continue
+                    if isinstance(info, dict):
+                        template_text = info.get("template")
+                        mask_text = info.get("mask", "")
+                        if isinstance(template_text, str):
+                            loaded_file_templates[name] = {
+                                "template": template_text,
+                                "mask": mask_text if isinstance(mask_text, str) else "",
+                            }
+                    elif isinstance(info, str):
+                        loaded_file_templates[name] = {"template": info, "mask": ""}
+                self.file_script_templates = loaded_file_templates
         except (OSError, json.JSONDecodeError):
             pass
 
@@ -728,6 +751,7 @@ class NessusViewer(tk.Tk):
             "column_widths": self.column_widths,
             "nmap_column_widths": self.nmap_column_widths,
             "script_templates": self.script_templates,
+            "file_script_templates": self.file_script_templates,
         }
         try:
             with open(self.config_path, "w", encoding="utf-8") as fh:
@@ -1607,6 +1631,30 @@ class NessusViewer(tk.Tk):
         template_frame = ttk.LabelFrame(parent, text="Command Template")
         template_frame.pack(fill=tk.BOTH, expand=False, padx=5, pady=(0, 5))
 
+        selection_frame = ttk.Frame(template_frame)
+        selection_frame.pack(fill=tk.X, padx=5, pady=(5, 0))
+        ttk.Label(selection_frame, text="Saved Templates:").pack(
+            side=tk.LEFT, padx=(0, 5)
+        )
+        self.file_template_selector = ttk.Combobox(
+            selection_frame,
+            textvariable=self.file_selected_template_var,
+            state="readonly",
+            width=25,
+        )
+        self.file_template_selector.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.file_template_selector.bind(
+            "<<ComboboxSelected>>", self._on_file_script_template_selected
+        )
+        self.file_selected_template_var.trace_add(
+            "write", lambda *_: self._update_file_template_button_state()
+        )
+        ttk.Button(
+            selection_frame,
+            text="Load",
+            command=self._on_file_script_template_selected,
+        ).pack(side=tk.LEFT, padx=(5, 0))
+
         ttk.Label(
             template_frame,
             text=(
@@ -1617,6 +1665,26 @@ class NessusViewer(tk.Tk):
 
         self.file_script_template_text = tk.Text(template_frame, height=4, wrap="word")
         self.file_script_template_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        save_frame = ttk.Frame(template_frame)
+        save_frame.pack(fill=tk.X, padx=5, pady=(0, 5))
+        ttk.Label(save_frame, text="Template Name:").pack(side=tk.LEFT)
+        name_entry = ttk.Entry(
+            save_frame, textvariable=self.file_new_template_name_var, width=20
+        )
+        name_entry.pack(side=tk.LEFT, padx=(5, 5), fill=tk.X, expand=True)
+        ttk.Button(
+            save_frame,
+            text="Save Template",
+            command=self.save_file_script_template,
+        ).pack(side=tk.LEFT)
+        self.file_delete_template_button = ttk.Button(
+            save_frame,
+            text="Delete Template",
+            command=self.delete_file_script_template,
+        )
+        self.file_delete_template_button.pack(side=tk.LEFT, padx=(5, 0))
+        self.file_delete_template_button.state(["disabled"])
 
         action_frame = ttk.Frame(parent)
         action_frame.pack(fill=tk.X, padx=5)
@@ -1635,6 +1703,129 @@ class NessusViewer(tk.Tk):
         self.file_script_output_text = tk.Text(output_frame, height=10, wrap="word")
         self.file_script_output_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
         self.file_script_output_text.config(state=tk.DISABLED)
+
+        self._update_file_template_combobox()
+
+    def _update_file_template_combobox(self) -> None:
+        """Refresh the saved file template selector with current entries."""
+
+        if self.file_template_selector is None:
+            return
+
+        options = ["Custom"] + sorted(self.file_script_templates)
+        self.file_template_selector["values"] = options
+        if self.file_selected_template_var.get() not in options:
+            self.file_selected_template_var.set("Custom")
+        self._update_file_template_button_state()
+
+    def _on_file_script_template_selected(
+        self, _event: Optional[tk.Event] = None
+    ) -> None:
+        """Load the selected file script template and associated mask."""
+
+        choice = self.file_selected_template_var.get()
+        if choice == "Custom":
+            self._update_file_template_button_state()
+            return
+
+        template_info = self.file_script_templates.get(choice, {})
+        template_text = (
+            template_info.get("template", "") if isinstance(template_info, dict) else ""
+        )
+        mask_text = (
+            template_info.get("mask", "") if isinstance(template_info, dict) else ""
+        )
+
+        if self.file_script_template_text is not None:
+            self.file_script_template_text.delete("1.0", tk.END)
+            self.file_script_template_text.insert(tk.END, template_text)
+        self.file_mask_var.set(mask_text)
+        self.file_new_template_name_var.set(choice)
+        self._update_file_template_button_state()
+
+    def save_file_script_template(self) -> None:
+        """Persist the current file script template and mask."""
+
+        name = self.file_new_template_name_var.get().strip()
+        if not name:
+            messagebox.showwarning(
+                "Missing Name", "Enter a name before saving the template."
+            )
+            return
+        if name == "Custom":
+            messagebox.showwarning(
+                "Reserved Name",
+                "Choose a different name; 'Custom' is reserved for unsaved templates.",
+            )
+            return
+
+        template = ""
+        if self.file_script_template_text is not None:
+            template = self.file_script_template_text.get("1.0", tk.END).strip()
+        if not template:
+            messagebox.showwarning(
+                "Missing Template",
+                "Enter a command template before saving.",
+            )
+            return
+
+        mask_text = self.file_mask_var.get().strip()
+
+        if name in self.file_script_templates:
+            overwrite = messagebox.askyesno(
+                "Overwrite Template",
+                f"A template named '{name}' already exists. Overwrite it?",
+            )
+            if not overwrite:
+                return
+
+        self.file_script_templates[name] = {"template": template, "mask": mask_text}
+        self.file_selected_template_var.set(name)
+        self._update_file_template_combobox()
+        self._save_config()
+        messagebox.showinfo("Template Saved", f"Template '{name}' saved for future use.")
+
+    def delete_file_script_template(self) -> None:
+        """Remove the selected file script template from storage."""
+
+        choice = self.file_selected_template_var.get()
+        if choice == "Custom":
+            messagebox.showinfo("Select Template", "Choose a saved template to delete.")
+            return
+        if choice not in self.file_script_templates:
+            messagebox.showwarning(
+                "Template Missing",
+                "The selected template could not be found. Please refresh and try again.",
+            )
+            self._update_file_template_combobox()
+            return
+
+        confirm = messagebox.askyesno(
+            "Delete Template", f"Delete the saved template '{choice}'?"
+        )
+        if not confirm:
+            return
+
+        del self.file_script_templates[choice]
+        self.file_selected_template_var.set("Custom")
+        self.file_new_template_name_var.set("")
+        self._update_file_template_combobox()
+        self._save_config()
+        messagebox.showinfo(
+            "Template Deleted", f"Template '{choice}' has been removed."
+        )
+
+    def _update_file_template_button_state(self) -> None:
+        """Toggle delete availability based on template selection."""
+
+        if self.file_delete_template_button is None:
+            return
+
+        choice = self.file_selected_template_var.get()
+        if choice != "Custom" and choice in self.file_script_templates:
+            self.file_delete_template_button.state(["!disabled"])
+        else:
+            self.file_delete_template_button.state(["disabled"])
 
     def _update_script_builder_lists(self) -> None:
         """Refresh the host/port table and button states."""

@@ -65,6 +65,10 @@ class NessusViewer(tk.Tk):
         # Track sort direction for issue columns
         self._sort_reverse: Dict[str, bool] = {}
 
+        # Script builder state
+        self.script_hosts: Set[str] = set()
+        self.script_ports: Set[int] = set()
+
         # Column configuration
         self.columns = ("host", "port", "protocol", "severity", "plugin", "file")
         self.config_path = os.path.join(
@@ -177,6 +181,9 @@ class NessusViewer(tk.Tk):
         self.issue_menu.add_command(
             label="Copy Hosts and Ports", command=self.copy_selected_hosts_ports
         )
+        self.issue_menu.add_command(
+            label="Send to Script Builder", command=self.send_selected_to_script_builder
+        )
         self.issue_tree.bind("<Button-3>", self._show_issue_menu)
 
         detail_frame = ttk.Frame(records_frame)
@@ -234,6 +241,18 @@ class NessusViewer(tk.Tk):
         )
         self.copy_button.pack(anchor=tk.W, padx=5, pady=(0, 5))
         self.copy_button.state(["disabled"])
+
+        self.send_ports_button = ttk.Button(
+            info_frame,
+            text="Send Ports to Script Builder",
+            command=self.send_ports_to_script_builder,
+        )
+        self.send_ports_button.pack(anchor=tk.W, padx=5, pady=(0, 5))
+        self.send_ports_button.state(["disabled"])
+
+        script_frame = ttk.Frame(notebook)
+        notebook.add(script_frame, text="Script Builder")
+        self._build_script_builder_tab(script_frame)
 
         menu = tk.Menu(self)
         self.config(menu=menu)
@@ -512,9 +531,11 @@ class NessusViewer(tk.Tk):
             ports_sorted = ",".join(str(p) for p in sorted(self.ports))
             self.port_text.insert(tk.END, ports_sorted)
             self.copy_button.state(["!disabled"])
+            self.send_ports_button.state(["!disabled"])
         else:
             self.port_text.insert(tk.END, "None")
             self.copy_button.state(["disabled"])
+            self.send_ports_button.state(["disabled"])
         self.port_text.config(state=tk.DISABLED)
 
     def clear_filter(self) -> None:
@@ -559,6 +580,204 @@ class NessusViewer(tk.Tk):
         self.clipboard_clear()
         self.clipboard_append(ports_sorted)
         messagebox.showinfo("Copied", "Open ports copied to clipboard.")
+
+    def _build_script_builder_tab(self, parent: tk.Widget) -> None:
+        """Initialize widgets used for building scripts."""
+
+        list_frame = ttk.Frame(parent)
+        list_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        host_frame = ttk.LabelFrame(list_frame, text="Hosts")
+        host_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
+        self.script_host_listbox = tk.Listbox(host_frame, height=6)
+        self.script_host_listbox.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        port_frame = ttk.LabelFrame(list_frame, text="Ports")
+        port_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.script_port_listbox = tk.Listbox(port_frame, height=6)
+        self.script_port_listbox.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        control_frame = ttk.Frame(parent)
+        control_frame.pack(fill=tk.X, padx=5)
+        self.clear_script_button = ttk.Button(
+            control_frame,
+            text="Clear Hosts & Ports",
+            command=self.clear_script_builder_entries,
+        )
+        self.clear_script_button.pack(anchor=tk.W, pady=(0, 5))
+        self.clear_script_button.state(["disabled"])
+
+        template_frame = ttk.LabelFrame(parent, text="Command Template")
+        template_frame.pack(fill=tk.BOTH, expand=False, padx=5, pady=(0, 5))
+        ttk.Label(
+            template_frame,
+            text="Use <host> and <port> placeholders to build commands.",
+        ).pack(anchor=tk.W, padx=5, pady=(5, 0))
+        self.script_template_text = tk.Text(template_frame, height=5, wrap="word")
+        self.script_template_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        action_frame = ttk.Frame(parent)
+        action_frame.pack(fill=tk.X, padx=5)
+        self.build_script_button = ttk.Button(
+            action_frame, text="Build Script", command=self.build_script
+        )
+        self.build_script_button.pack(side=tk.LEFT, pady=(0, 5))
+
+        self.copy_script_button = ttk.Button(
+            action_frame, text="Copy Script", command=self.copy_script_output
+        )
+        self.copy_script_button.pack(side=tk.LEFT, padx=(5, 0), pady=(0, 5))
+        self.copy_script_button.state(["disabled"])
+
+        output_frame = ttk.LabelFrame(parent, text="Generated Script")
+        output_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
+        self.script_output_text = tk.Text(output_frame, height=10, wrap="word")
+        self.script_output_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.script_output_text.config(state=tk.DISABLED)
+
+    def _update_script_builder_lists(self) -> None:
+        """Refresh listboxes for hosts and ports and button states."""
+
+        self.script_host_listbox.delete(0, tk.END)
+        for host in sorted(self.script_hosts):
+            self.script_host_listbox.insert(tk.END, host)
+
+        self.script_port_listbox.delete(0, tk.END)
+        for port in sorted(self.script_ports):
+            self.script_port_listbox.insert(tk.END, str(port))
+
+        if self.script_hosts or self.script_ports:
+            self.clear_script_button.state(["!disabled"])
+        else:
+            self.clear_script_button.state(["disabled"])
+
+    def add_to_script_builder(
+        self, hosts: Iterable[str], ports: Iterable[int]
+    ) -> None:
+        """Add hosts and ports to the script builder collections."""
+
+        added = False
+        for host in hosts:
+            if host and host not in self.script_hosts:
+                self.script_hosts.add(host)
+                added = True
+
+        for port in ports:
+            if port and port not in self.script_ports:
+                self.script_ports.add(port)
+                added = True
+
+        if added:
+            self._update_script_builder_lists()
+
+    def clear_script_builder_entries(self) -> None:
+        """Remove all hosts and ports stored for script building."""
+
+        if not self.script_hosts and not self.script_ports:
+            return
+        self.script_hosts.clear()
+        self.script_ports.clear()
+        self._update_script_builder_lists()
+
+    def send_selected_to_script_builder(self) -> None:
+        """Send selected issue hosts and ports to the script builder."""
+
+        selection = self.issue_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "No issues selected.")
+            return
+
+        hosts: List[str] = []
+        ports: List[int] = []
+        for item in selection:
+            index = self.issue_tree.index(item)
+            try:
+                issue = self.visible_issues[index]
+            except IndexError:
+                continue
+            hosts.append(issue["host"])
+            port_value = issue.get("port")
+            if isinstance(port_value, int) and port_value:
+                ports.append(port_value)
+
+        self.add_to_script_builder(hosts, ports)
+        if hosts or ports:
+            messagebox.showinfo(
+                "Added",
+                "Selected hosts and ports added to the Script Builder tab.",
+            )
+
+    def send_ports_to_script_builder(self) -> None:
+        """Add the current set of ports to the script builder."""
+
+        if not self.ports:
+            messagebox.showwarning("No Ports", "No open ports to send.")
+            return
+        self.add_to_script_builder([], self.ports)
+        messagebox.showinfo("Added", "Ports added to the Script Builder tab.")
+
+    def build_script(self) -> None:
+        """Generate a bash script from the stored hosts, ports, and template."""
+
+        template = self.script_template_text.get("1.0", tk.END).strip()
+        if not template:
+            messagebox.showwarning(
+                "Missing Template", "Enter a command template before building."
+            )
+            return
+
+        hosts = sorted(self.script_hosts)
+        ports = sorted(self.script_ports)
+
+        use_host = "<host>" in template
+        use_port = "<port>" in template
+
+        if use_host and not hosts:
+            messagebox.showwarning(
+                "Missing Hosts", "Add at least one host to the Script Builder."
+            )
+            return
+        if use_port and not ports:
+            messagebox.showwarning(
+                "Missing Ports", "Add at least one port to the Script Builder."
+            )
+            return
+
+        script_lines: List[str] = ["#!/usr/bin/env bash", ""]
+
+        if use_host and use_port:
+            for host in hosts:
+                for port in ports:
+                    line = template.replace("<host>", host).replace("<port>", str(port))
+                    script_lines.append(line)
+        elif use_host:
+            for host in hosts:
+                line = template.replace("<host>", host)
+                script_lines.append(line)
+        elif use_port:
+            for port in ports:
+                line = template.replace("<port>", str(port))
+                script_lines.append(line)
+        else:
+            script_lines.append(template)
+
+        script_output = "\n".join(script_lines)
+        self.script_output_text.config(state=tk.NORMAL)
+        self.script_output_text.delete("1.0", tk.END)
+        self.script_output_text.insert(tk.END, script_output)
+        self.script_output_text.config(state=tk.DISABLED)
+        self.copy_script_button.state(["!disabled"])
+
+    def copy_script_output(self) -> None:
+        """Copy the generated script to the clipboard."""
+
+        script = self.script_output_text.get("1.0", tk.END).strip()
+        if not script:
+            messagebox.showwarning("No Script", "Build a script before copying.")
+            return
+        self.clipboard_clear()
+        self.clipboard_append(script)
+        messagebox.showinfo("Copied", "Script copied to clipboard.")
 
     def _parse_report_item(self, item: ET.Element, host: str) -> Dict[str, Any]:
         """Extract relevant information from a ReportItem."""

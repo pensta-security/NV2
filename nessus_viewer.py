@@ -1,3 +1,4 @@
+import fnmatch
 import json
 import os
 import tkinter as tk
@@ -98,6 +99,17 @@ class NessusViewer(tk.Tk):
         self.script_entries: List[Tuple[Optional[str], Optional[int]]] = []
         self._script_entry_set: Set[Tuple[Optional[str], Optional[int]]] = set()
         self.script_templates: Dict[str, str] = dict(DEFAULT_SCRIPT_TEMPLATES)
+
+        # File-based script builder state
+        self.file_script_scan_results: List[Tuple[str, str]] = []
+        self.file_script_scan_root: Optional[str] = None
+        self.file_directory_var = tk.StringVar()
+        self.file_mask_var = tk.StringVar(value="*")
+        self.file_script_status_var = tk.StringVar(value="No directory scanned.")
+        self.file_script_tree: Optional[ttk.Treeview] = None
+        self.file_script_template_text: Optional[tk.Text] = None
+        self.file_script_output_text: Optional[tk.Text] = None
+        self.file_script_copy_button: Optional[ttk.Button] = None
 
         # Column configuration
         self.columns = ("host", "port", "protocol", "severity", "plugin", "file")
@@ -345,6 +357,10 @@ class NessusViewer(tk.Tk):
         script_frame = ttk.Frame(notebook)
         notebook.add(script_frame, text="Script Builder")
         self._build_script_builder_tab(script_frame)
+
+        file_script_frame = ttk.Frame(notebook)
+        notebook.add(file_script_frame, text="Script Builder By Files")
+        self._build_file_script_builder_tab(file_script_frame)
 
         nmap_frame = ttk.Frame(notebook)
         notebook.add(nmap_frame, text="Nmap Records")
@@ -1530,6 +1546,96 @@ class NessusViewer(tk.Tk):
 
         self._update_template_combobox()
 
+    def _build_file_script_builder_tab(self, parent: tk.Widget) -> None:
+        """Initialize widgets for building scripts from filesystem paths."""
+
+        scan_frame = ttk.LabelFrame(parent, text="Directory Scan")
+        scan_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        dir_frame = ttk.Frame(scan_frame)
+        dir_frame.pack(fill=tk.X, padx=5, pady=(5, 0))
+
+        ttk.Label(dir_frame, text="Directory:").pack(side=tk.LEFT)
+        ttk.Entry(dir_frame, textvariable=self.file_directory_var).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 5)
+        )
+        ttk.Button(
+            dir_frame, text="Browse", command=self._browse_file_script_directory
+        ).pack(side=tk.LEFT)
+        ttk.Button(dir_frame, text="Scan", command=self.scan_file_script_directory).pack(
+            side=tk.LEFT, padx=(5, 0)
+        )
+
+        mask_frame = ttk.Frame(scan_frame)
+        mask_frame.pack(fill=tk.X, padx=5, pady=5)
+        ttk.Label(mask_frame, text="File Mask(s):").pack(side=tk.LEFT)
+        ttk.Entry(mask_frame, textvariable=self.file_mask_var).pack(
+            side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 5)
+        )
+        ttk.Label(
+            scan_frame,
+            text="Use comma-separated glob patterns (e.g. *.testssl, *.txt).",
+        ).pack(anchor=tk.W, padx=5, pady=(0, 5))
+
+        results_frame = ttk.LabelFrame(parent, text="Discovered Paths")
+        results_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
+
+        tree_container = ttk.Frame(results_frame)
+        tree_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        tree_scroll = ttk.Scrollbar(tree_container, orient=tk.VERTICAL)
+        tree_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.file_script_tree = ttk.Treeview(
+            tree_container,
+            columns=("type", "path"),
+            show="headings",
+            height=8,
+        )
+        self.file_script_tree.heading("type", text="Type")
+        self.file_script_tree.heading("path", text="Relative Path")
+        self.file_script_tree.column("type", width=100, stretch=False, anchor=tk.CENTER)
+        self.file_script_tree.column("path", width=600, stretch=True)
+        self.file_script_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.file_script_tree.configure(yscrollcommand=tree_scroll.set)
+        tree_scroll.configure(command=self.file_script_tree.yview)
+
+        ttk.Label(results_frame, textvariable=self.file_script_status_var).pack(
+            anchor=tk.W, padx=5, pady=(0, 5)
+        )
+
+        template_frame = ttk.LabelFrame(parent, text="Command Template")
+        template_frame.pack(fill=tk.BOTH, expand=False, padx=5, pady=(0, 5))
+
+        ttk.Label(
+            template_frame,
+            text=(
+                "Use <path> for the absolute path and <name> for the file name when "
+                "building commands."
+            ),
+        ).pack(anchor=tk.W, padx=5, pady=(5, 0))
+
+        self.file_script_template_text = tk.Text(template_frame, height=4, wrap="word")
+        self.file_script_template_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        action_frame = ttk.Frame(parent)
+        action_frame.pack(fill=tk.X, padx=5)
+
+        ttk.Button(action_frame, text="Build Script", command=self.build_file_script).pack(
+            side=tk.LEFT, pady=(0, 5)
+        )
+        self.file_script_copy_button = ttk.Button(
+            action_frame, text="Copy Script", command=self.copy_file_script_output
+        )
+        self.file_script_copy_button.pack(side=tk.LEFT, padx=(5, 0), pady=(0, 5))
+        self.file_script_copy_button.state(["disabled"])
+
+        output_frame = ttk.LabelFrame(parent, text="Generated Script")
+        output_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
+        self.file_script_output_text = tk.Text(output_frame, height=10, wrap="word")
+        self.file_script_output_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.file_script_output_text.config(state=tk.DISABLED)
+
     def _update_script_builder_lists(self) -> None:
         """Refresh the host/port table and button states."""
 
@@ -1986,6 +2092,177 @@ class NessusViewer(tk.Tk):
         """Copy the generated script to the clipboard."""
 
         script = self.script_output_text.get("1.0", tk.END).strip()
+        if not script:
+            messagebox.showwarning("No Script", "Build a script before copying.")
+            return
+        self.clipboard_clear()
+        self.clipboard_append(script)
+        messagebox.showinfo("Copied", "Script copied to clipboard.")
+
+    def _browse_file_script_directory(self) -> None:
+        """Prompt the user to choose a directory for scanning."""
+
+        directory = filedialog.askdirectory(title="Select Directory")
+        if directory:
+            normalized = os.path.abspath(directory)
+            self.file_directory_var.set(normalized)
+
+    def scan_file_script_directory(self) -> None:
+        """Scan the chosen directory and populate the file list."""
+
+        directory = self.file_directory_var.get().strip()
+        if not directory:
+            messagebox.showwarning("Missing Directory", "Select a directory to scan.")
+            return
+
+        normalized = os.path.abspath(directory)
+        if not os.path.isdir(normalized):
+            messagebox.showerror(
+                "Invalid Directory", f"{normalized} is not a valid directory."
+            )
+            return
+
+        entries: List[Tuple[str, str]] = []
+        try:
+            for root, dirs, files in os.walk(normalized):
+                dirs.sort()
+                files.sort()
+                entries.append((root, "directory"))
+                for name in files:
+                    entries.append((os.path.join(root, name), "file"))
+        except OSError as exc:
+            messagebox.showerror("Scan Failed", f"Unable to scan directory:\n{exc}")
+            return
+
+        self.file_directory_var.set(normalized)
+        self.file_script_scan_root = normalized
+        self.file_script_scan_results = entries
+        self._update_file_script_results()
+
+    def _clear_file_script_output(self) -> None:
+        """Reset the generated file script text and disable copy actions."""
+
+        if self.file_script_output_text is None or self.file_script_copy_button is None:
+            return
+        self.file_script_output_text.config(state=tk.NORMAL)
+        self.file_script_output_text.delete("1.0", tk.END)
+        self.file_script_output_text.config(state=tk.DISABLED)
+        self.file_script_copy_button.state(["disabled"])
+
+    def _update_file_script_results(self) -> None:
+        """Refresh the directory tree view after scanning."""
+
+        if self.file_script_tree is None:
+            return
+
+        self.file_script_tree.delete(*self.file_script_tree.get_children())
+
+        if not self.file_script_scan_root or not self.file_script_scan_results:
+            self.file_script_status_var.set("No directory scanned.")
+            self._clear_file_script_output()
+            return
+
+        root_path = self.file_script_scan_root
+        for path, kind in self.file_script_scan_results:
+            relative = os.path.relpath(path, root_path)
+            if relative == ".":
+                display_path = "."
+            else:
+                display_path = relative
+                if kind == "directory":
+                    display_path = f"{display_path}/"
+            display_type = "Folder" if kind == "directory" else "File"
+            self.file_script_tree.insert("", tk.END, values=(display_type, display_path))
+
+        file_count = sum(1 for _, kind in self.file_script_scan_results if kind == "file")
+        folder_count = sum(
+            1 for _, kind in self.file_script_scan_results if kind == "directory"
+        )
+        self.file_script_status_var.set(
+            f"Found {file_count} files and {folder_count} folders under {root_path}."
+        )
+        self._clear_file_script_output()
+
+    def _parse_file_mask_patterns(self) -> List[str]:
+        """Parse the mask entry into a list of glob patterns."""
+
+        raw = self.file_mask_var.get().strip()
+        if not raw:
+            return []
+        normalized = raw.replace(";", ",")
+        patterns = [part.strip() for part in normalized.split(",") if part.strip()]
+        return patterns
+
+    def build_file_script(self) -> None:
+        """Generate a bash script for files matching the provided mask."""
+
+        if self.file_script_template_text is None:
+            return
+
+        template = self.file_script_template_text.get("1.0", tk.END).strip()
+        if not template:
+            messagebox.showwarning(
+                "Missing Template", "Enter a command template before building."
+            )
+            return
+
+        if "<path>" not in template and "<name>" not in template:
+            messagebox.showwarning(
+                "Missing Placeholder",
+                "Include the <path> or <name> placeholder in the template to insert file paths.",
+            )
+            return
+
+        if not self.file_script_scan_results:
+            messagebox.showwarning(
+                "No Scan Results", "Scan a directory before building a script."
+            )
+            return
+
+        patterns = self._parse_file_mask_patterns()
+        matched_files: List[str] = []
+        for path, kind in self.file_script_scan_results:
+            if kind != "file":
+                continue
+            name = os.path.basename(path)
+            if not patterns or any(fnmatch.fnmatch(name, pattern) for pattern in patterns):
+                matched_files.append(path)
+
+        unique_files = sorted(set(matched_files))
+        if not unique_files:
+            messagebox.showwarning(
+                "No Matching Files",
+                "No files matched the provided mask. Adjust the mask and scan again.",
+            )
+            self._clear_file_script_output()
+            return
+
+        if self.file_script_output_text is None or self.file_script_copy_button is None:
+            return
+
+        script_lines = ["#!/usr/bin/env bash", ""]
+        for file_path in unique_files:
+            line = (
+                template.replace("<path>", file_path).replace(
+                    "<name>", os.path.basename(file_path)
+                )
+            )
+            script_lines.append(line)
+
+        script_output = "\n".join(script_lines)
+        self.file_script_output_text.config(state=tk.NORMAL)
+        self.file_script_output_text.delete("1.0", tk.END)
+        self.file_script_output_text.insert(tk.END, script_output)
+        self.file_script_output_text.config(state=tk.DISABLED)
+        self.file_script_copy_button.state(["!disabled"])
+
+    def copy_file_script_output(self) -> None:
+        """Copy the generated file-based script to the clipboard."""
+
+        if self.file_script_output_text is None:
+            return
+
+        script = self.file_script_output_text.get("1.0", tk.END).strip()
         if not script:
             messagebox.showwarning("No Script", "Build a script before copying.")
             return

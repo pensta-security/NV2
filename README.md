@@ -2,20 +2,23 @@
 
 Utilities for analyzing vulnerability reports.
 
-## Nessus Viewer
+## Nessus & Nmap Viewer
 
 `nessus_viewer.py` provides a simple Tkinter GUI for examining one or more
-Nessus (`.nessus`) files:
+Nessus (`.nessus`) and Nmap (`.xml`) files:
 
-- Open files via **File > Open Nessus Files**.
-- Quickly import previous files through **File > Recent Files**, which keeps
-  the last ten entries. Selecting multiple entries in succession adds them to
-  the current view.
-- The left pane lists discovered issues. Double-click an entry to view
-  detailed information.
-- Select one or more issues and right-click to copy their host:port pairs to
-  the clipboard, one per line.
-- A search box above the list filters issues by any text, including host,
-  plugin name, severity, or source file.
-- The bottom of the window shows which Nessus files were opened and all unique
-  open TCP/UDP ports, sorted in ascending order and separated by commas.
+- Open Nessus files via **File > Open Nessus Files**. Nmap XML can be loaded
+  from **Nmap > Open Nmap XML**. Both menus keep the ten most recent files for
+  quick access.
+- The **Nessus Records** tab lists vulnerability findings. Double-click an
+  entry to view detailed information.
+- The **Nmap Records** tab mirrors that experience for port-scan data,
+  including service details and script output where available.
+- Right-click either table to copy selected host:port pairs or send them to
+  the Script Builder.
+- Each tab exposes search and filter controls tailored to the available data
+  (severity for Nessus, port state for Nmap).
+- The **Files & Ports** tab now summarises the files opened for each scanner
+  and lists the associated ports. Nessus ports reflect open findings, and the
+  Nmap list shows open ports by default (or any state chosen in the Nmap tab).
+  Both lists can be copied or sent directly to the Script Builder.

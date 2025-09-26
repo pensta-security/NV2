@@ -167,7 +167,7 @@ class NessusViewer(tk.Tk):
         for tag, color in SEVERITY_COLORS.items():
             self.issue_tree.tag_configure(tag, foreground=color)
         self.issue_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.issue_tree.bind("<Double-Button-1>", self.show_details)
+        self.issue_tree.bind("<<TreeviewSelect>>", self.show_details)
         self.issue_tree.bind(
             "<ButtonRelease-1>", lambda _e: self._capture_column_widths()
         )

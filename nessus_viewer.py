@@ -412,11 +412,20 @@ class NessusViewer(tk.Tk):
         self._save_config()
         self.destroy()
 
+    def _format_severity(self, severity: Any) -> str:
+        """Return a human readable label for a severity value."""
+        severity_str = "" if severity is None else str(severity)
+        label = SEVERITY_NAMES.get(severity_str)
+        if label:
+            return f"{label} ({severity_str})"
+        return severity_str
+
     def _refresh_issue_list(self) -> None:
         """Refresh the table with the current visible issues."""
         self.issue_tree.delete(*self.issue_tree.get_children())
         for idx, issue in enumerate(self.visible_issues):
             tag = SEVERITY_TAGS.get(str(issue.get("severity", "")), "")
+            severity_display = self._format_severity(issue.get("severity"))
             self.issue_tree.insert(
                 "",
                 tk.END,
@@ -426,7 +435,7 @@ class NessusViewer(tk.Tk):
                     issue["host"],
                     issue["port"],
                     issue["protocol"],
-                    issue["severity"],
+                    severity_display,
                     issue["plugin_name"],
                     issue.get("file", ""),
                 ),
@@ -469,7 +478,9 @@ class NessusViewer(tk.Tk):
                 for issue in filtered
                 if term in issue["host"].lower()
                 or term in issue["protocol"].lower()
-                or term in issue["severity"].lower()
+                or term in str(issue.get("severity", "")).lower()
+                or term
+                in SEVERITY_NAMES.get(str(issue.get("severity", "")), "").lower()
                 or term in issue["plugin_name"].lower()
                 or term in str(issue["port"])
                 or term in issue.get("file", "").lower()
@@ -581,7 +592,7 @@ class NessusViewer(tk.Tk):
         details = [
             f"Host: {issue['host']}",
             f"Port: {issue['port']}/{issue['protocol']}",
-            f"Severity: {issue['severity']}",
+            f"Severity: {self._format_severity(issue.get('severity'))}",
             f"Risk Factor: {issue.get('risk_factor', '')}",
             f"Plugin ID: {issue['plugin_id']}",
             f"Plugin Name: {issue['plugin_name']}",

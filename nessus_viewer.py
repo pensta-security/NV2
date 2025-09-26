@@ -121,12 +121,30 @@ class NessusViewer(tk.Tk):
             side=tk.LEFT, padx=5
         )
 
+        tree_container = ttk.Frame(list_frame)
+        tree_container.pack(fill=tk.BOTH, expand=True)
+
+        tree_vscroll = ttk.Scrollbar(
+            tree_container, orient=tk.VERTICAL
+        )
+        tree_vscroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        tree_hscroll = ttk.Scrollbar(
+            tree_container, orient=tk.HORIZONTAL
+        )
+        tree_hscroll.pack(side=tk.BOTTOM, fill=tk.X)
+
         self.issue_tree = ttk.Treeview(
-            list_frame,
+            tree_container,
             columns=self.columns,
             show="headings",
             selectmode="extended",
         )
+        self.issue_tree.configure(
+            yscrollcommand=tree_vscroll.set, xscrollcommand=tree_hscroll.set
+        )
+        tree_vscroll.configure(command=self.issue_tree.yview)
+        tree_hscroll.configure(command=self.issue_tree.xview)
         headings = {
             "host": "Host",
             "port": "Port",
@@ -148,7 +166,7 @@ class NessusViewer(tk.Tk):
             )
         for tag, color in SEVERITY_COLORS.items():
             self.issue_tree.tag_configure(tag, foreground=color)
-        self.issue_tree.pack(fill=tk.BOTH, expand=True)
+        self.issue_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.issue_tree.bind("<Double-Button-1>", self.show_details)
         self.issue_tree.bind(
             "<ButtonRelease-1>", lambda _e: self._capture_column_widths()
@@ -166,8 +184,18 @@ class NessusViewer(tk.Tk):
 
         # Text widget for long-form information such as descriptions and
         # plugin output.
-        self.detail_text = tk.Text(detail_frame, wrap="word")
-        self.detail_text.pack(fill=tk.BOTH, expand=True)
+        detail_text_container = ttk.Frame(detail_frame)
+        detail_text_container.pack(fill=tk.BOTH, expand=True)
+
+        detail_scroll = ttk.Scrollbar(
+            detail_text_container, orient=tk.VERTICAL
+        )
+        detail_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.detail_text = tk.Text(detail_text_container, wrap="word")
+        self.detail_text.configure(yscrollcommand=detail_scroll.set)
+        self.detail_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        detail_scroll.configure(command=self.detail_text.yview)
 
         # Table for references like CVE/BID/XREF that are easier to view in a
         # structured format.
@@ -189,8 +217,16 @@ class NessusViewer(tk.Tk):
         self.file_vars: Dict[str, tk.BooleanVar] = {}
 
         ttk.Label(info_frame, text="Open Ports:").pack(anchor=tk.W, padx=5)
-        self.port_text = tk.Text(info_frame, height=5, wrap="word")
-        self.port_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
+        port_text_container = ttk.Frame(info_frame)
+        port_text_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
+
+        port_scroll = ttk.Scrollbar(port_text_container, orient=tk.VERTICAL)
+        port_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.port_text = tk.Text(port_text_container, height=5, wrap="word")
+        self.port_text.configure(yscrollcommand=port_scroll.set)
+        self.port_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        port_scroll.configure(command=self.port_text.yview)
         self.port_text.config(state=tk.DISABLED)
 
         self.copy_button = ttk.Button(

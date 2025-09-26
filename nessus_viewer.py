@@ -3,7 +3,7 @@ import os
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 import xml.etree.ElementTree as ET
-from typing import Any, Dict, Iterable, List, Optional, Set
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 
 # Mapping of numeric severity levels to tag names used for styling rows.
@@ -65,9 +65,9 @@ class NessusViewer(tk.Tk):
         # Track sort direction for issue columns
         self._sort_reverse: Dict[str, bool] = {}
 
-        # Script builder state
-        self.script_hosts: Set[str] = set()
-        self.script_ports: Set[int] = set()
+        # Script builder state stores host/port pairings.
+        self.script_entries: List[Tuple[Optional[str], Optional[int]]] = []
+        self._script_entry_set: Set[Tuple[Optional[str], Optional[int]]] = set()
 
         # Column configuration
         self.columns = ("host", "port", "protocol", "severity", "plugin", "file")
@@ -584,18 +584,28 @@ class NessusViewer(tk.Tk):
     def _build_script_builder_tab(self, parent: tk.Widget) -> None:
         """Initialize widgets used for building scripts."""
 
-        list_frame = ttk.Frame(parent)
-        list_frame.pack(fill=tk.X, padx=5, pady=5)
+        table_frame = ttk.LabelFrame(parent, text="Hosts & Ports")
+        table_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        host_frame = ttk.LabelFrame(list_frame, text="Hosts")
-        host_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 5))
-        self.script_host_listbox = tk.Listbox(host_frame, height=6)
-        self.script_host_listbox.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        tree_container = ttk.Frame(table_frame)
+        tree_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
 
-        port_frame = ttk.LabelFrame(list_frame, text="Ports")
-        port_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self.script_port_listbox = tk.Listbox(port_frame, height=6)
-        self.script_port_listbox.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        tree_scrollbar = ttk.Scrollbar(tree_container, orient=tk.VERTICAL)
+        tree_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.script_entry_tree = ttk.Treeview(
+            tree_container,
+            columns=("host", "port"),
+            show="headings",
+            height=6,
+        )
+        self.script_entry_tree.heading("host", text="Host")
+        self.script_entry_tree.heading("port", text="Port")
+        self.script_entry_tree.column("host", width=200, stretch=True)
+        self.script_entry_tree.column("port", width=80, stretch=False, anchor=tk.CENTER)
+        self.script_entry_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.script_entry_tree.configure(yscrollcommand=tree_scrollbar.set)
+        tree_scrollbar.configure(command=self.script_entry_tree.yview)
 
         control_frame = ttk.Frame(parent)
         control_frame.pack(fill=tk.X, padx=5)
@@ -636,35 +646,37 @@ class NessusViewer(tk.Tk):
         self.script_output_text.config(state=tk.DISABLED)
 
     def _update_script_builder_lists(self) -> None:
-        """Refresh listboxes for hosts and ports and button states."""
+        """Refresh the host/port table and button states."""
 
-        self.script_host_listbox.delete(0, tk.END)
-        for host in sorted(self.script_hosts):
-            self.script_host_listbox.insert(tk.END, host)
+        self.script_entry_tree.delete(*self.script_entry_tree.get_children())
+        for host, port in sorted(
+            self.script_entries,
+            key=lambda item: (
+                item[0] or "",  # sort empty hosts first alphabetically
+                item[1] if item[1] is not None else -1,
+            ),
+        ):
+            display_port = "" if port is None else str(port)
+            self.script_entry_tree.insert("", tk.END, values=(host or "", display_port))
 
-        self.script_port_listbox.delete(0, tk.END)
-        for port in sorted(self.script_ports):
-            self.script_port_listbox.insert(tk.END, str(port))
-
-        if self.script_hosts or self.script_ports:
+        if self.script_entries:
             self.clear_script_button.state(["!disabled"])
         else:
             self.clear_script_button.state(["disabled"])
 
     def add_to_script_builder(
-        self, hosts: Iterable[str], ports: Iterable[int]
+        self, entries: Iterable[Tuple[Optional[str], Optional[int]]]
     ) -> None:
-        """Add hosts and ports to the script builder collections."""
+        """Add host/port combinations to the script builder."""
 
         added = False
-        for host in hosts:
-            if host and host not in self.script_hosts:
-                self.script_hosts.add(host)
-                added = True
-
-        for port in ports:
-            if port and port not in self.script_ports:
-                self.script_ports.add(port)
+        for host, port in entries:
+            normalized_host = host or None
+            normalized_port = port if port else None
+            key = (normalized_host, normalized_port)
+            if key not in self._script_entry_set:
+                self._script_entry_set.add(key)
+                self.script_entries.append(key)
                 added = True
 
         if added:
@@ -673,10 +685,10 @@ class NessusViewer(tk.Tk):
     def clear_script_builder_entries(self) -> None:
         """Remove all hosts and ports stored for script building."""
 
-        if not self.script_hosts and not self.script_ports:
+        if not self.script_entries:
             return
-        self.script_hosts.clear()
-        self.script_ports.clear()
+        self.script_entries.clear()
+        self._script_entry_set.clear()
         self._update_script_builder_lists()
 
     def send_selected_to_script_builder(self) -> None:
@@ -687,21 +699,20 @@ class NessusViewer(tk.Tk):
             messagebox.showwarning("No Selection", "No issues selected.")
             return
 
-        hosts: List[str] = []
-        ports: List[int] = []
+        entries: List[Tuple[Optional[str], Optional[int]]] = []
         for item in selection:
             index = self.issue_tree.index(item)
             try:
                 issue = self.visible_issues[index]
             except IndexError:
                 continue
-            hosts.append(issue["host"])
+            host = issue["host"]
             port_value = issue.get("port")
-            if isinstance(port_value, int) and port_value:
-                ports.append(port_value)
+            port = port_value if isinstance(port_value, int) and port_value else None
+            entries.append((host, port))
 
-        self.add_to_script_builder(hosts, ports)
-        if hosts or ports:
+        self.add_to_script_builder(entries)
+        if entries:
             messagebox.showinfo(
                 "Added",
                 "Selected hosts and ports added to the Script Builder tab.",
@@ -713,7 +724,7 @@ class NessusViewer(tk.Tk):
         if not self.ports:
             messagebox.showwarning("No Ports", "No open ports to send.")
             return
-        self.add_to_script_builder([], self.ports)
+        self.add_to_script_builder((None, port) for port in self.ports)
         messagebox.showinfo("Added", "Ports added to the Script Builder tab.")
 
     def build_script(self) -> None:
@@ -726,8 +737,13 @@ class NessusViewer(tk.Tk):
             )
             return
 
-        hosts = sorted(self.script_hosts)
-        ports = sorted(self.script_ports)
+        host_port_pairs = [
+            (host, port)
+            for host, port in self.script_entries
+            if host and port is not None
+        ]
+        hosts = sorted({host for host, _ in self.script_entries if host})
+        ports = sorted({port for _, port in self.script_entries if port is not None})
 
         use_host = "<host>" in template
         use_port = "<port>" in template
@@ -746,10 +762,15 @@ class NessusViewer(tk.Tk):
         script_lines: List[str] = ["#!/usr/bin/env bash", ""]
 
         if use_host and use_port:
-            for host in hosts:
-                for port in ports:
-                    line = template.replace("<host>", host).replace("<port>", str(port))
-                    script_lines.append(line)
+            if not host_port_pairs:
+                messagebox.showwarning(
+                    "Missing Host/Port Pairs",
+                    "Add entries that include both a host and a port to use both placeholders.",
+                )
+                return
+            for host, port in sorted(host_port_pairs):
+                line = template.replace("<host>", host).replace("<port>", str(port))
+                script_lines.append(line)
         elif use_host:
             for host in hosts:
                 line = template.replace("<host>", host)

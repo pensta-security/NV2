@@ -1,10 +1,10 @@
-# NV2
+# Pentest Slayer
 
 Utilities for analyzing vulnerability reports.
 
-## Nessus & Nmap Viewer
+## Pentest Slayer
 
-`nessus_viewer.py` provides a simple Tkinter GUI for examining one or more
+`pentest_slayer.py` provides a simple Tkinter GUI for examining one or more
 Nessus (`.nessus`) and Nmap (`.xml`) files:
 
 - Open Nessus files via **File > Open Nessus Files**. Nmap XML can be loaded

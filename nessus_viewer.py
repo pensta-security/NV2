@@ -627,6 +627,21 @@ class NessusViewer(tk.Tk):
 
         control_frame = ttk.Frame(parent)
         control_frame.pack(fill=tk.X, padx=5)
+        self.import_script_button = ttk.Button(
+            control_frame,
+            text="Import Hosts & Ports",
+            command=self.import_script_builder_entries,
+        )
+        self.import_script_button.pack(anchor=tk.W, pady=(0, 5))
+
+        self.export_script_button = ttk.Button(
+            control_frame,
+            text="Export Hosts & Ports",
+            command=self.export_script_builder_entries,
+        )
+        self.export_script_button.pack(anchor=tk.W, pady=(0, 5))
+        self.export_script_button.state(["disabled"])
+
         self.clear_script_button = ttk.Button(
             control_frame,
             text="Clear Hosts & Ports",
@@ -725,8 +740,10 @@ class NessusViewer(tk.Tk):
 
         if self.script_entries:
             self.clear_script_button.state(["!disabled"])
+            self.export_script_button.state(["!disabled"])
         else:
             self.clear_script_button.state(["disabled"])
+            self.export_script_button.state(["disabled"])
 
     def add_to_script_builder(
         self, entries: Iterable[Tuple[Optional[str], Optional[int]]]
@@ -745,6 +762,125 @@ class NessusViewer(tk.Tk):
 
         if added:
             self._update_script_builder_lists()
+
+    def import_script_builder_entries(self) -> None:
+        """Load host and port entries from a text file."""
+
+        file_path = filedialog.askopenfilename(
+            title="Import Hosts & Ports",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        if not file_path:
+            return
+
+        entries: List[Tuple[Optional[str], Optional[int]]] = []
+        invalid_lines: List[str] = []
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as fh:
+                for line_no, raw_line in enumerate(fh, start=1):
+                    line = raw_line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+
+                    host_part, separator, port_part = line.partition(":")
+                    host = host_part.strip() or None
+                    port: Optional[int]
+
+                    if separator:
+                        port_str = port_part.strip()
+                        if port_str:
+                            try:
+                                port = int(port_str)
+                            except ValueError:
+                                invalid_lines.append(f"Line {line_no}: invalid port '{port_str}'")
+                                continue
+                            if port <= 0 or port > 65535:
+                                invalid_lines.append(
+                                    f"Line {line_no}: port out of range '{port_str}'"
+                                )
+                                continue
+                        else:
+                            port = None
+                    else:
+                        port = None
+
+                    if host is None and port is None:
+                        invalid_lines.append(f"Line {line_no}: no host or port specified")
+                        continue
+
+                    entries.append((host, port))
+        except OSError as exc:
+            messagebox.showerror("Import Failed", f"Could not read file:\n{exc}")
+            return
+
+        if not entries:
+            message = "No valid host or port entries were found in the selected file."
+            if invalid_lines:
+                message += "\n\n" + "\n".join(invalid_lines)
+            messagebox.showwarning("No Entries Imported", message)
+            return
+
+        before_count = len(self.script_entries)
+        self.add_to_script_builder(entries)
+        after_count = len(self.script_entries)
+
+        if after_count == before_count:
+            messagebox.showinfo(
+                "No New Entries",
+                "All entries from the file were already present in the Script Builder.",
+            )
+        else:
+            messagebox.showinfo(
+                "Import Complete",
+                f"Imported {after_count - before_count} new host/port entries.",
+            )
+
+        if invalid_lines:
+            messagebox.showwarning(
+                "Some Entries Skipped",
+                "\n".join(invalid_lines),
+            )
+
+    def export_script_builder_entries(self) -> None:
+        """Save current host and port entries to a text file."""
+
+        if not self.script_entries:
+            messagebox.showwarning(
+                "No Entries", "Add hosts or ports before exporting to a file."
+            )
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            title="Export Hosts & Ports",
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        if not file_path:
+            return
+
+        try:
+            with open(file_path, "w", encoding="utf-8") as fh:
+                for host, port in sorted(
+                    self.script_entries,
+                    key=lambda item: (
+                        item[0] or "",
+                        item[1] if item[1] is not None else -1,
+                    ),
+                ):
+                    host_part = host or ""
+                    if port is not None:
+                        if host_part:
+                            fh.write(f"{host_part}:{port}\n")
+                        else:
+                            fh.write(f":{port}\n")
+                    else:
+                        fh.write(f"{host_part}\n")
+        except OSError as exc:
+            messagebox.showerror("Export Failed", f"Could not write file:\n{exc}")
+            return
+
+        messagebox.showinfo("Export Complete", f"Saved entries to {file_path}.")
 
     def clear_script_builder_entries(self) -> None:
         """Remove all hosts and ports stored for script building."""

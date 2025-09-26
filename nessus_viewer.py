@@ -276,11 +276,18 @@ class NessusViewer(tk.Tk):
         self.visible_issues.clear()
         self.ports.clear()
         self.issue_tree.delete(*self.issue_tree.get_children())
-        self.detail_text.delete("1.0", tk.END)
+        self._clear_details()
         self.opened_files = []
         for child in self.file_checkbox_frame.winfo_children():
             child.destroy()
         self.file_vars.clear()
+
+    def _clear_details(self) -> None:
+        """Reset the detail text and references table."""
+        self.detail_text.config(state=tk.NORMAL)
+        self.detail_text.delete("1.0", tk.END)
+        self.detail_text.config(state=tk.DISABLED)
+        self.ref_tree.delete(*self.ref_tree.get_children())
 
     def _import_files(self, file_paths: Iterable[str]) -> None:
         """Parse Nessus files and append to current state."""
@@ -440,6 +447,9 @@ class NessusViewer(tk.Tk):
                     issue.get("file", ""),
                 ),
             )
+
+        if not self.issue_tree.selection():
+            self._clear_details()
 
     def sort_issues(self, column: str) -> None:
         """Sort the visible issues by the given column."""
@@ -606,12 +616,13 @@ class NessusViewer(tk.Tk):
         if issue.get("plugin_output"):
             details.append(f"\nPlugin Output:\n{issue['plugin_output']}")
 
+        self.detail_text.config(state=tk.NORMAL)
         self.detail_text.delete("1.0", tk.END)
         self.detail_text.insert(tk.END, "\n".join(details))
+        self.detail_text.config(state=tk.DISABLED)
 
         # Populate the reference table.
-        for row in self.ref_tree.get_children():
-            self.ref_tree.delete(row)
+        self.ref_tree.delete(*self.ref_tree.get_children())
         for ref in issue.get("cve", []):
             self.ref_tree.insert("", tk.END, values=("CVE", ref))
         for ref in issue.get("bid", []):

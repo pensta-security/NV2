@@ -83,6 +83,16 @@ class NessusViewer(tk.Tk):
         )
         self._nmap_sort_reverse: Dict[str, bool] = {}
         self.nmap_state_options: List[str] = ["All states"]
+        self.nmap_ports: Set[str] = set()
+
+        # Widgets initialised in ``_create_widgets`` but referenced elsewhere.
+        self.port_text: Optional[tk.Text] = None
+        self.copy_button: Optional[ttk.Button] = None
+        self.send_ports_button: Optional[ttk.Button] = None
+        self.nmap_port_text: Optional[tk.Text] = None
+        self.nmap_copy_button: Optional[ttk.Button] = None
+        self.nmap_send_ports_button: Optional[ttk.Button] = None
+        self.nmap_file_summary_frame: Optional[ttk.Frame] = None
 
         # Script builder state stores host/port pairings and reusable templates.
         self.script_entries: List[Tuple[Optional[str], Optional[int]]] = []
@@ -136,7 +146,7 @@ class NessusViewer(tk.Tk):
         notebook.pack(fill=tk.BOTH, expand=True)
 
         records_frame = ttk.Frame(notebook)
-        notebook.add(records_frame, text="Records")
+        notebook.add(records_frame, text="Nessus Records")
 
         list_frame = ttk.Frame(records_frame)
         list_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -257,15 +267,18 @@ class NessusViewer(tk.Tk):
         info_frame = ttk.Frame(notebook)
         notebook.add(info_frame, text="Files & Ports")
 
-        ttk.Label(info_frame, text="Opened Nessus Files:").pack(
+        nessus_section = ttk.LabelFrame(info_frame, text="Nessus")
+        nessus_section.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+
+        ttk.Label(nessus_section, text="Opened Nessus Files:").pack(
             anchor=tk.W, padx=5, pady=(5, 0)
         )
-        self.file_checkbox_frame = ttk.Frame(info_frame)
+        self.file_checkbox_frame = ttk.Frame(nessus_section)
         self.file_checkbox_frame.pack(fill=tk.X, padx=5, pady=5)
         self.file_vars: Dict[str, tk.BooleanVar] = {}
 
-        ttk.Label(info_frame, text="Open Ports:").pack(anchor=tk.W, padx=5)
-        port_text_container = ttk.Frame(info_frame)
+        ttk.Label(nessus_section, text="Open Ports:").pack(anchor=tk.W, padx=5)
+        port_text_container = ttk.Frame(nessus_section)
         port_text_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
 
         port_scroll = ttk.Scrollbar(port_text_container, orient=tk.VERTICAL)
@@ -278,18 +291,56 @@ class NessusViewer(tk.Tk):
         self.port_text.config(state=tk.DISABLED)
 
         self.copy_button = ttk.Button(
-            info_frame, text="Copy Ports", command=self.copy_ports
+            nessus_section, text="Copy Ports", command=self.copy_ports
         )
         self.copy_button.pack(anchor=tk.W, padx=5, pady=(0, 5))
         self.copy_button.state(["disabled"])
 
         self.send_ports_button = ttk.Button(
-            info_frame,
+            nessus_section,
             text="Send Ports to Script Builder",
             command=self.send_ports_to_script_builder,
         )
         self.send_ports_button.pack(anchor=tk.W, padx=5, pady=(0, 5))
         self.send_ports_button.state(["disabled"])
+
+        nmap_section = ttk.LabelFrame(info_frame, text="Nmap")
+        nmap_section.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
+
+        ttk.Label(nmap_section, text="Opened Nmap Files:").pack(
+            anchor=tk.W, padx=5, pady=(5, 0)
+        )
+        self.nmap_file_summary_frame = ttk.Frame(nmap_section)
+        self.nmap_file_summary_frame.pack(fill=tk.X, padx=5, pady=5)
+
+        ttk.Label(nmap_section, text="Ports (open by default):").pack(
+            anchor=tk.W, padx=5
+        )
+        nmap_port_container = ttk.Frame(nmap_section)
+        nmap_port_container.pack(fill=tk.BOTH, expand=True, padx=5, pady=(0, 5))
+
+        nmap_port_scroll = ttk.Scrollbar(nmap_port_container, orient=tk.VERTICAL)
+        nmap_port_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self.nmap_port_text = tk.Text(nmap_port_container, height=5, wrap="word")
+        self.nmap_port_text.configure(yscrollcommand=nmap_port_scroll.set)
+        self.nmap_port_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        nmap_port_scroll.configure(command=self.nmap_port_text.yview)
+        self.nmap_port_text.config(state=tk.DISABLED)
+
+        self.nmap_copy_button = ttk.Button(
+            nmap_section, text="Copy Ports", command=self.copy_nmap_ports
+        )
+        self.nmap_copy_button.pack(anchor=tk.W, padx=5, pady=(0, 5))
+        self.nmap_copy_button.state(["disabled"])
+
+        self.nmap_send_ports_button = ttk.Button(
+            nmap_section,
+            text="Send Ports to Script Builder",
+            command=self.send_nmap_ports_to_script_builder,
+        )
+        self.nmap_send_ports_button.pack(anchor=tk.W, padx=5, pady=(0, 5))
+        self.nmap_send_ports_button.state(["disabled"])
 
         script_frame = ttk.Frame(notebook)
         notebook.add(script_frame, text="Script Builder")
@@ -391,6 +442,9 @@ class NessusViewer(tk.Tk):
         if hasattr(self, "nmap_file_checkbox_frame"):
             for child in self.nmap_file_checkbox_frame.winfo_children():
                 child.destroy()
+        if self.nmap_file_summary_frame is not None:
+            for child in self.nmap_file_summary_frame.winfo_children():
+                child.destroy()
         self.nmap_file_vars.clear()
         if hasattr(self, "nmap_tree"):
             self.nmap_tree.delete(*self.nmap_tree.get_children())
@@ -398,6 +452,16 @@ class NessusViewer(tk.Tk):
         if hasattr(self, "nmap_state_combo"):
             self.nmap_state_combo.configure(values=self.nmap_state_options)
             self.nmap_state_var.set("All states")
+        self.nmap_ports.clear()
+        if self.nmap_port_text is not None:
+            self.nmap_port_text.config(state=tk.NORMAL)
+            self.nmap_port_text.delete("1.0", tk.END)
+            self.nmap_port_text.insert(tk.END, "None")
+            self.nmap_port_text.config(state=tk.DISABLED)
+        if self.nmap_copy_button is not None:
+            self.nmap_copy_button.state(["disabled"])
+        if self.nmap_send_ports_button is not None:
+            self.nmap_send_ports_button.state(["disabled"])
         self._clear_nmap_details()
 
     def _clear_details(self) -> None:
@@ -492,6 +556,14 @@ class NessusViewer(tk.Tk):
                 command=self.filter_nmap_records,
             )
             cb.pack(anchor=tk.W)
+            if self.nmap_file_summary_frame is not None:
+                summary_cb = ttk.Checkbutton(
+                    self.nmap_file_summary_frame,
+                    text=name,
+                    variable=var,
+                    command=self.filter_nmap_records,
+                )
+                summary_cb.pack(anchor=tk.W)
             self.nmap_file_vars[name] = var
             new_paths.append(path)
 
@@ -701,6 +773,12 @@ class NessusViewer(tk.Tk):
 
     def filter_issues(self, _event: Optional[tk.Event] = None) -> None:
         """Filter issues based on the search entry, selected files and severity."""
+        if (
+            self.port_text is None
+            or self.copy_button is None
+            or self.send_ports_button is None
+        ):
+            return
         term = self.search_var.get().lower()
         selected_files = [name for name, var in self.file_vars.items() if var.get()]
         selected_severity = self.severity_var.get()
@@ -795,6 +873,24 @@ class NessusViewer(tk.Tk):
         self.clipboard_clear()
         self.clipboard_append(ports_sorted)
         messagebox.showinfo("Copied", "Open ports copied to clipboard.")
+
+    def copy_nmap_ports(self) -> None:
+        """Copy the current Nmap port listing to the clipboard."""
+
+        if not self.nmap_ports:
+            messagebox.showwarning("No Ports", "No Nmap ports to copy.")
+            return
+
+        def sort_key(port: str) -> Tuple[int, Any]:
+            try:
+                return (0, int(port))
+            except ValueError:
+                return (1, port)
+
+        ports_sorted = ",".join(sorted(self.nmap_ports, key=sort_key))
+        self.clipboard_clear()
+        self.clipboard_append(ports_sorted)
+        messagebox.showinfo("Copied", "Nmap ports copied to clipboard.")
 
     def _capture_nmap_column_widths(self) -> None:
         """Persist column widths for the Nmap table in memory."""
@@ -935,7 +1031,9 @@ class NessusViewer(tk.Tk):
 
         if state_filter != "All states":
             records = [
-                record for record in records if record.get("state", "").lower() == state_filter.lower()
+                record
+                for record in records
+                if record.get("state", "").lower() == state_filter.lower()
             ]
 
         if term:
@@ -954,6 +1052,26 @@ class NessusViewer(tk.Tk):
 
         self.visible_nmap_records = records
         self._refresh_nmap_list()
+
+        ports: Set[str] = set()
+        state_filter_lower = state_filter.lower()
+        for record in self.nmap_records:
+            if selected_files and record.get("file", "") not in selected_files:
+                continue
+            state_value = str(record.get("state", "")).lower()
+            if state_filter == "All states":
+                if "open" not in state_value:
+                    continue
+            else:
+                if state_value != state_filter_lower:
+                    continue
+            port_value = record.get("port")
+            if port_value in (None, ""):
+                continue
+            ports.add(str(port_value))
+
+        self.nmap_ports = ports
+        self._update_nmap_ports_display()
 
     def _refresh_nmap_list(self) -> None:
         """Refresh the treeview with the visible Nmap records."""
@@ -980,6 +1098,31 @@ class NessusViewer(tk.Tk):
 
         if not self.nmap_tree.selection():
             self._clear_nmap_details()
+
+    def _update_nmap_ports_display(self) -> None:
+        """Update the Nmap ports text widget and associated buttons."""
+
+        if self.nmap_port_text is None or self.nmap_copy_button is None or self.nmap_send_ports_button is None:
+            return
+
+        def sort_key(port: str) -> Tuple[int, Any]:
+            try:
+                return (0, int(port))
+            except ValueError:
+                return (1, port)
+
+        self.nmap_port_text.config(state=tk.NORMAL)
+        self.nmap_port_text.delete("1.0", tk.END)
+        if self.nmap_ports:
+            ordered_ports = ",".join(sorted(self.nmap_ports, key=sort_key))
+            self.nmap_port_text.insert(tk.END, ordered_ports)
+            self.nmap_copy_button.state(["!disabled"])
+            self.nmap_send_ports_button.state(["!disabled"])
+        else:
+            self.nmap_port_text.insert(tk.END, "None")
+            self.nmap_copy_button.state(["disabled"])
+            self.nmap_send_ports_button.state(["disabled"])
+        self.nmap_port_text.config(state=tk.DISABLED)
 
     def clear_nmap_filter(self) -> None:
         """Reset search and state filters for the Nmap tab."""
@@ -1644,6 +1787,33 @@ class NessusViewer(tk.Tk):
             return
         self.add_to_script_builder((None, port) for port in self.ports)
         messagebox.showinfo("Added", "Ports added to the Script Builder tab.")
+
+    def send_nmap_ports_to_script_builder(self) -> None:
+        """Add the current Nmap ports to the script builder."""
+
+        if not self.nmap_ports:
+            messagebox.showwarning("No Ports", "No Nmap ports to send.")
+            return
+
+        entries: List[Tuple[Optional[str], Optional[int]]] = []
+        for port_str in self.nmap_ports:
+            try:
+                port = int(port_str)
+            except ValueError:
+                continue
+            if port <= 0 or port > 65535:
+                continue
+            entries.append((None, port))
+
+        if not entries:
+            messagebox.showinfo(
+                "Nothing to Send",
+                "Nmap ports are non-numeric and cannot be added to the Script Builder.",
+            )
+            return
+
+        self.add_to_script_builder(entries)
+        messagebox.showinfo("Added", "Nmap ports added to the Script Builder tab.")
 
     def build_script(self) -> None:
         """Generate a bash script from the stored hosts, ports, and template."""

@@ -70,6 +70,20 @@ class NessusViewer(tk.Tk):
         # Track sort direction for issue columns
         self._sort_reverse: Dict[str, bool] = {}
 
+        # Nmap specific collections mirror the Nessus state so the UI can offer
+        # a comparable experience when reviewing scan data from different
+        # tools.
+        self.nmap_records: List[Dict[str, Any]] = []
+        self.visible_nmap_records: List[Dict[str, Any]] = []
+        self.nmap_opened_files: List[str] = []
+        self.nmap_file_vars: Dict[str, tk.BooleanVar] = {}
+        self.nmap_recent_files: List[str] = []
+        self.nmap_recent_files_path = os.path.join(
+            os.path.expanduser("~"), ".nessus_viewer_nmap_recent"
+        )
+        self._nmap_sort_reverse: Dict[str, bool] = {}
+        self.nmap_state_options: List[str] = ["All states"]
+
         # Script builder state stores host/port pairings and reusable templates.
         self.script_entries: List[Tuple[Optional[str], Optional[int]]] = []
         self._script_entry_set: Set[Tuple[Optional[str], Optional[int]]] = set()
@@ -88,8 +102,29 @@ class NessusViewer(tk.Tk):
             "plugin": 300,
             "file": 180,
         }
+        self.nmap_columns = (
+            "host",
+            "port",
+            "protocol",
+            "state",
+            "service",
+            "product",
+            "version",
+            "file",
+        )
+        self.nmap_column_widths: Dict[str, int] = {
+            "host": 160,
+            "port": 70,
+            "protocol": 90,
+            "state": 90,
+            "service": 160,
+            "product": 160,
+            "version": 140,
+            "file": 180,
+        }
 
         self._load_recent_files()
+        self._load_nmap_recent_files()
         self._load_config()
 
         self._create_widgets()
@@ -260,6 +295,10 @@ class NessusViewer(tk.Tk):
         notebook.add(script_frame, text="Script Builder")
         self._build_script_builder_tab(script_frame)
 
+        nmap_frame = ttk.Frame(notebook)
+        notebook.add(nmap_frame, text="Nmap Records")
+        self._build_nmap_tab(nmap_frame)
+
         menu = tk.Menu(self)
         self.config(menu=menu)
         file_menu = tk.Menu(menu, tearoff=0)
@@ -270,6 +309,13 @@ class NessusViewer(tk.Tk):
         self._update_recent_files_menu()
         file_menu.add_separator()
         file_menu.add_command(label="Exit", command=self._on_close)
+
+        nmap_menu = tk.Menu(menu, tearoff=0)
+        menu.add_cascade(label="Nmap", menu=nmap_menu)
+        nmap_menu.add_command(label="Open Nmap XML", command=self.open_nmap_files)
+        self.nmap_recent_menu = tk.Menu(nmap_menu, tearoff=0)
+        nmap_menu.add_cascade(label="Recent Files", menu=self.nmap_recent_menu)
+        self._update_nmap_recent_files_menu()
 
     def open_files(self) -> None:
         """Open and parse one or more Nessus files."""
@@ -291,10 +337,38 @@ class NessusViewer(tk.Tk):
             return
         self._import_files([path])
 
+    def open_nmap_files(self) -> None:
+        """Open and parse one or more Nmap XML files."""
+
+        file_paths = filedialog.askopenfilenames(
+            title="Open Nmap XML files",
+            filetypes=[("Nmap XML", "*.xml"), ("All files", "*.*")],
+        )
+        if file_paths:
+            self._load_nmap_files(file_paths)
+
+    def open_recent_nmap_file(self, path: str) -> None:
+        """Import an Nmap XML file from the recent list."""
+
+        if not os.path.exists(path):
+            messagebox.showerror("File not found", f"{path} not found")
+            if path in self.nmap_recent_files:
+                self.nmap_recent_files.remove(path)
+                self._save_nmap_recent_files()
+                self._update_nmap_recent_files_menu()
+            return
+        self._import_nmap_files([path])
+
     def _load_files(self, file_paths: Iterable[str]) -> None:
         """Replace current data with the given Nessus files."""
         self._clear_data()
         self._import_files(file_paths)
+
+    def _load_nmap_files(self, file_paths: Iterable[str]) -> None:
+        """Replace current Nmap data with the given XML files."""
+
+        self._clear_nmap_data()
+        self._import_nmap_files(file_paths)
 
     def _clear_data(self) -> None:
         """Remove all currently loaded issues and related state."""
@@ -307,6 +381,24 @@ class NessusViewer(tk.Tk):
         for child in self.file_checkbox_frame.winfo_children():
             child.destroy()
         self.file_vars.clear()
+
+    def _clear_nmap_data(self) -> None:
+        """Remove all currently loaded Nmap records and related state."""
+
+        self.nmap_records.clear()
+        self.visible_nmap_records.clear()
+        self.nmap_opened_files.clear()
+        if hasattr(self, "nmap_file_checkbox_frame"):
+            for child in self.nmap_file_checkbox_frame.winfo_children():
+                child.destroy()
+        self.nmap_file_vars.clear()
+        if hasattr(self, "nmap_tree"):
+            self.nmap_tree.delete(*self.nmap_tree.get_children())
+        self.nmap_state_options = ["All states"]
+        if hasattr(self, "nmap_state_combo"):
+            self.nmap_state_combo.configure(values=self.nmap_state_options)
+            self.nmap_state_var.set("All states")
+        self._clear_nmap_details()
 
     def _clear_details(self) -> None:
         """Reset the detail text and references table."""
@@ -382,6 +474,71 @@ class NessusViewer(tk.Tk):
         self._save_recent_files()
         self._update_recent_files_menu()
 
+    def _import_nmap_files(self, file_paths: Iterable[str]) -> None:
+        """Parse Nmap XML files and append to current state."""
+
+        file_paths = list(file_paths)
+        new_paths: List[str] = []
+        for path in file_paths:
+            name = os.path.basename(path)
+            if name in self.nmap_opened_files:
+                continue
+            self.nmap_opened_files.append(name)
+            var = tk.BooleanVar(value=True)
+            cb = ttk.Checkbutton(
+                self.nmap_file_checkbox_frame,
+                text=name,
+                variable=var,
+                command=self.filter_nmap_records,
+            )
+            cb.pack(anchor=tk.W)
+            self.nmap_file_vars[name] = var
+            new_paths.append(path)
+
+        if new_paths:
+            progress_win = tk.Toplevel(self)
+            progress_win.title("Importing files")
+            progress_win.transient(self)
+            progress_win.grab_set()
+            ttk.Label(progress_win, text="Importing Nmap files...").pack(
+                padx=10, pady=10
+            )
+            progress = ttk.Progressbar(
+                progress_win, length=300, mode="determinate", maximum=len(new_paths)
+            )
+            progress.pack(padx=10, pady=(0, 10))
+            progress_win.update_idletasks()
+
+            try:
+                for idx, path in enumerate(new_paths, start=1):
+                    try:
+                        records = self._parse_nmap_file(path)
+                    except ET.ParseError as exc:
+                        messagebox.showerror(
+                            "Parse error", f"Failed to parse {path}: {exc}"
+                        )
+                        progress["value"] = idx
+                        progress_win.update_idletasks()
+                        continue
+
+                    self.nmap_records.extend(records)
+                    progress["value"] = idx
+                    progress_win.update_idletasks()
+            finally:
+                progress_win.grab_release()
+                progress_win.destroy()
+
+        self._update_nmap_state_filter_options()
+        self.filter_nmap_records()
+
+        for path in new_paths:
+            if path in self.nmap_recent_files:
+                self.nmap_recent_files.remove(path)
+            self.nmap_recent_files.insert(0, path)
+        self.nmap_recent_files = self.nmap_recent_files[:10]
+        self._save_nmap_recent_files()
+        self._update_nmap_recent_files_menu()
+
     def _update_recent_files_menu(self) -> None:
         """Refresh the Recent Files submenu."""
         self.recent_menu.delete(0, tk.END)
@@ -394,6 +551,21 @@ class NessusViewer(tk.Tk):
                 command=lambda p=path: self.open_recent_file(p),
             )
 
+    def _update_nmap_recent_files_menu(self) -> None:
+        """Refresh the Recent Files submenu for Nmap data."""
+
+        self.nmap_recent_menu.delete(0, tk.END)
+        if not self.nmap_recent_files:
+            self.nmap_recent_menu.add_command(
+                label="(No recent files)", state=tk.DISABLED
+            )
+            return
+        for path in self.nmap_recent_files:
+            self.nmap_recent_menu.add_command(
+                label=os.path.basename(path),
+                command=lambda p=path: self.open_recent_nmap_file(p),
+            )
+
     def _load_recent_files(self) -> None:
         """Load recent files list from disk."""
         try:
@@ -402,11 +574,29 @@ class NessusViewer(tk.Tk):
         except OSError:
             self.recent_files = []
 
+    def _load_nmap_recent_files(self) -> None:
+        """Load recently opened Nmap files from disk."""
+
+        try:
+            with open(self.nmap_recent_files_path, "r", encoding="utf-8") as fh:
+                self.nmap_recent_files = [line.strip() for line in fh if line.strip()]
+        except OSError:
+            self.nmap_recent_files = []
+
     def _save_recent_files(self) -> None:
         """Persist recent files list to disk."""
         try:
             with open(self.recent_files_path, "w", encoding="utf-8") as fh:
                 fh.write("\n".join(self.recent_files))
+        except OSError:
+            pass
+
+    def _save_nmap_recent_files(self) -> None:
+        """Persist the recent Nmap files list to disk."""
+
+        try:
+            with open(self.nmap_recent_files_path, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(self.nmap_recent_files))
         except OSError:
             pass
 
@@ -428,6 +618,11 @@ class NessusViewer(tk.Tk):
                 if isinstance(width, int):
                     self.column_widths[col] = width
 
+            nmap_widths = data.get("nmap_column_widths", {})
+            for col, width in nmap_widths.items():
+                if isinstance(width, int):
+                    self.nmap_column_widths[col] = width
+
             if "script_templates" in data:
                 templates = data.get("script_templates", {})
                 if isinstance(templates, dict):
@@ -443,6 +638,7 @@ class NessusViewer(tk.Tk):
         """Persist configuration such as column widths to disk."""
         data = {
             "column_widths": self.column_widths,
+            "nmap_column_widths": self.nmap_column_widths,
             "script_templates": self.script_templates,
         }
         try:
@@ -454,6 +650,7 @@ class NessusViewer(tk.Tk):
     def _on_close(self) -> None:
         """Handle application exit and persist configuration."""
         self._capture_column_widths()
+        self._capture_nmap_column_widths()
         self._save_config()
         self.destroy()
 
@@ -598,6 +795,460 @@ class NessusViewer(tk.Tk):
         self.clipboard_clear()
         self.clipboard_append(ports_sorted)
         messagebox.showinfo("Copied", "Open ports copied to clipboard.")
+
+    def _capture_nmap_column_widths(self) -> None:
+        """Persist column widths for the Nmap table in memory."""
+
+        if not hasattr(self, "nmap_tree"):
+            return
+        for col in self.nmap_columns:
+            try:
+                self.nmap_column_widths[col] = self.nmap_tree.column(col)["width"]
+            except tk.TclError:
+                continue
+
+    def _build_nmap_tab(self, parent: tk.Widget) -> None:
+        """Initialize widgets and layout for the Nmap records tab."""
+
+        main_frame = ttk.Frame(parent)
+        main_frame.pack(fill=tk.BOTH, expand=True)
+
+        list_frame = ttk.Frame(main_frame)
+        list_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        search_frame = ttk.Frame(list_frame)
+        search_frame.pack(fill=tk.X)
+
+        ttk.Label(search_frame, text="Search:").pack(side=tk.LEFT, padx=5)
+        self.nmap_search_var = tk.StringVar()
+        nmap_search_entry = ttk.Entry(search_frame, textvariable=self.nmap_search_var)
+        nmap_search_entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        nmap_search_entry.bind("<KeyRelease>", self.filter_nmap_records)
+
+        ttk.Label(search_frame, text="State:").pack(side=tk.LEFT, padx=5)
+        self.nmap_state_var = tk.StringVar(value="All states")
+        self.nmap_state_combo = ttk.Combobox(
+            search_frame,
+            textvariable=self.nmap_state_var,
+            values=self.nmap_state_options,
+            state="readonly",
+            width=15,
+        )
+        self.nmap_state_combo.pack(side=tk.LEFT, padx=5)
+        self.nmap_state_combo.bind("<<ComboboxSelected>>", self.filter_nmap_records)
+
+        ttk.Button(search_frame, text="Clear", command=self.clear_nmap_filter).pack(
+            side=tk.LEFT, padx=5
+        )
+
+        files_frame = ttk.LabelFrame(list_frame, text="Files")
+        files_frame.pack(fill=tk.X, padx=5, pady=5)
+        self.nmap_file_checkbox_frame = ttk.Frame(files_frame)
+        self.nmap_file_checkbox_frame.pack(fill=tk.X)
+
+        tree_container = ttk.Frame(list_frame)
+        tree_container.pack(fill=tk.BOTH, expand=True)
+
+        tree_vscroll = ttk.Scrollbar(tree_container, orient=tk.VERTICAL)
+        tree_vscroll.pack(side=tk.RIGHT, fill=tk.Y)
+        tree_hscroll = ttk.Scrollbar(tree_container, orient=tk.HORIZONTAL)
+        tree_hscroll.pack(side=tk.BOTTOM, fill=tk.X)
+
+        self.nmap_tree = ttk.Treeview(
+            tree_container,
+            columns=self.nmap_columns,
+            show="headings",
+            selectmode="extended",
+        )
+        self.nmap_tree.configure(
+            yscrollcommand=tree_vscroll.set, xscrollcommand=tree_hscroll.set
+        )
+        tree_vscroll.configure(command=self.nmap_tree.yview)
+        tree_hscroll.configure(command=self.nmap_tree.xview)
+
+        headings = {
+            "host": "Host",
+            "port": "Port",
+            "protocol": "Protocol",
+            "state": "State",
+            "service": "Service",
+            "product": "Product",
+            "version": "Version",
+            "file": "File",
+        }
+        for col in self.nmap_columns:
+            self.nmap_tree.heading(
+                col,
+                text=headings[col],
+                command=lambda c=col: self.sort_nmap_records(c),
+            )
+            self.nmap_tree.column(
+                col,
+                stretch=True,
+                width=self.nmap_column_widths.get(col, 100),
+            )
+
+        self.nmap_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.nmap_tree.bind("<<TreeviewSelect>>", self.show_nmap_details)
+        self.nmap_tree.bind(
+            "<ButtonRelease-1>", lambda _e: self._capture_nmap_column_widths()
+        )
+
+        self.nmap_menu = tk.Menu(self.nmap_tree, tearoff=0)
+        self.nmap_menu.add_command(
+            label="Copy Hosts and Ports", command=self.copy_selected_nmap_hosts_ports
+        )
+        self.nmap_menu.add_command(
+            label="Send to Script Builder",
+            command=self.send_selected_nmap_to_script_builder,
+        )
+        self.nmap_tree.bind("<Button-3>", self._show_nmap_menu)
+
+        detail_frame = ttk.Frame(main_frame)
+        detail_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+
+        detail_container = ttk.Frame(detail_frame)
+        detail_container.pack(fill=tk.BOTH, expand=True)
+
+        detail_scroll = ttk.Scrollbar(detail_container, orient=tk.VERTICAL)
+        detail_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.nmap_detail_text = tk.Text(detail_container, wrap="word")
+        self.nmap_detail_text.configure(yscrollcommand=detail_scroll.set)
+        self.nmap_detail_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        detail_scroll.configure(command=self.nmap_detail_text.yview)
+        self.nmap_detail_text.config(state=tk.DISABLED)
+
+    def filter_nmap_records(self, _event: Optional[tk.Event] = None) -> None:
+        """Filter displayed Nmap records using the current controls."""
+
+        term = self.nmap_search_var.get().lower()
+        selected_files = [
+            name for name, var in self.nmap_file_vars.items() if var.get()
+        ]
+        state_filter = self.nmap_state_var.get()
+
+        records = [
+            record
+            for record in self.nmap_records
+            if not selected_files or record.get("file", "") in selected_files
+        ]
+
+        if state_filter != "All states":
+            records = [
+                record for record in records if record.get("state", "").lower() == state_filter.lower()
+            ]
+
+        if term:
+            records = [
+                record
+                for record in records
+                if term in record.get("host", "").lower()
+                or term in str(record.get("port", "")).lower()
+                or term in record.get("protocol", "").lower()
+                or term in record.get("state", "").lower()
+                or term in record.get("service", "").lower()
+                or term in record.get("product", "").lower()
+                or term in record.get("version", "").lower()
+                or term in record.get("file", "").lower()
+            ]
+
+        self.visible_nmap_records = records
+        self._refresh_nmap_list()
+
+    def _refresh_nmap_list(self) -> None:
+        """Refresh the treeview with the visible Nmap records."""
+
+        if not hasattr(self, "nmap_tree"):
+            return
+        self.nmap_tree.delete(*self.nmap_tree.get_children())
+        for idx, record in enumerate(self.visible_nmap_records):
+            self.nmap_tree.insert(
+                "",
+                tk.END,
+                iid=str(idx),
+                values=(
+                    record.get("host", ""),
+                    record.get("port", ""),
+                    record.get("protocol", ""),
+                    record.get("state", ""),
+                    record.get("service", ""),
+                    record.get("product", ""),
+                    record.get("version", ""),
+                    record.get("file", ""),
+                ),
+            )
+
+        if not self.nmap_tree.selection():
+            self._clear_nmap_details()
+
+    def clear_nmap_filter(self) -> None:
+        """Reset search and state filters for the Nmap tab."""
+
+        self.nmap_search_var.set("")
+        self.nmap_state_var.set("All states")
+        self.filter_nmap_records()
+
+    def sort_nmap_records(self, column: str) -> None:
+        """Sort the visible Nmap records by the requested column."""
+
+        reverse = self._nmap_sort_reverse.get(column, False)
+        if column == "port":
+            key_func = lambda r: int(r.get("port") or 0)
+        else:
+            key_func = lambda r: str(r.get(column, "")).lower()
+        self.visible_nmap_records.sort(key=key_func, reverse=reverse)
+        self._nmap_sort_reverse[column] = not reverse
+        self._refresh_nmap_list()
+
+    def _clear_nmap_details(self) -> None:
+        """Clear the Nmap detail text box."""
+
+        if not hasattr(self, "nmap_detail_text"):
+            return
+        self.nmap_detail_text.config(state=tk.NORMAL)
+        self.nmap_detail_text.delete("1.0", tk.END)
+        self.nmap_detail_text.config(state=tk.DISABLED)
+
+    def show_nmap_details(self, _event: Optional[tk.Event] = None) -> None:
+        """Populate the detail pane with information about the selected record."""
+
+        selection = self.nmap_tree.selection()
+        if not selection:
+            return
+        index = self.nmap_tree.index(selection[0])
+        if index >= len(self.visible_nmap_records):
+            return
+        record = self.visible_nmap_records[index]
+
+        lines = [
+            f"Host: {record.get('host', '')}",
+            f"Port: {record.get('port', '')}/{record.get('protocol', '')}",
+            f"State: {record.get('state', '')}",
+            f"Reason: {record.get('reason', '')}",
+            f"Service: {record.get('service', '')}",
+            f"Product: {record.get('product', '')}",
+            f"Version: {record.get('version', '')}",
+            f"Extra Info: {record.get('extrainfo', '')}",
+            f"CPE: {', '.join(record.get('cpe', []))}",
+            f"Source File: {record.get('file', '')}",
+        ]
+
+        hostnames = record.get("hostnames", [])
+        if hostnames:
+            lines.append("\nHostnames:")
+            for name in hostnames:
+                lines.append(f"  - {name}")
+
+        scripts = record.get("scripts", [])
+        if scripts:
+            lines.append("\nScripts:")
+            for script in scripts:
+                lines.append(f"  * {script.get('id', '')}")
+                output = script.get("output", "")
+                if output:
+                    lines.append(f"    {output}")
+
+        self.nmap_detail_text.config(state=tk.NORMAL)
+        self.nmap_detail_text.delete("1.0", tk.END)
+        self.nmap_detail_text.insert(tk.END, "\n".join(lines))
+        self.nmap_detail_text.config(state=tk.DISABLED)
+
+    def _show_nmap_menu(self, event: tk.Event) -> None:
+        """Display the context menu for the Nmap record list."""
+
+        item = self.nmap_tree.identify_row(event.y)
+        if item and item not in self.nmap_tree.selection():
+            self.nmap_tree.selection_set(item)
+        try:
+            self.nmap_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.nmap_menu.grab_release()
+
+    def copy_selected_nmap_hosts_ports(self) -> None:
+        """Copy selected Nmap host:port pairs to the clipboard."""
+
+        selection = self.nmap_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "No Nmap records selected.")
+            return
+        lines = []
+        for item in selection:
+            index = self.nmap_tree.index(item)
+            if index >= len(self.visible_nmap_records):
+                continue
+            record = self.visible_nmap_records[index]
+            host = record.get("host")
+            port = record.get("port")
+            if host and port:
+                lines.append(f"{host}:{port}")
+        if not lines:
+            messagebox.showinfo(
+                "Nothing to Copy", "Selected rows do not contain host and port data."
+            )
+            return
+        self.clipboard_clear()
+        self.clipboard_append("\n".join(lines))
+        messagebox.showinfo("Copied", "Hosts and ports copied to clipboard.")
+
+    def send_selected_nmap_to_script_builder(self) -> None:
+        """Send selected Nmap host/port pairs to the script builder."""
+
+        selection = self.nmap_tree.selection()
+        if not selection:
+            messagebox.showwarning("No Selection", "No Nmap records selected.")
+            return
+        entries: List[Tuple[Optional[str], Optional[int]]] = []
+        for item in selection:
+            index = self.nmap_tree.index(item)
+            if index >= len(self.visible_nmap_records):
+                continue
+            record = self.visible_nmap_records[index]
+            host = record.get("host") or None
+            port_value = record.get("port")
+            port: Optional[int]
+            try:
+                port = int(port_value) if port_value else None
+            except (TypeError, ValueError):
+                port = None
+            if host or port is not None:
+                entries.append((host, port))
+        if not entries:
+            messagebox.showinfo(
+                "Nothing to Send", "No host or port information to send to the Script Builder."
+            )
+            return
+        self.add_to_script_builder(entries)
+        messagebox.showinfo(
+            "Added", "Selected Nmap entries were sent to the Script Builder."
+        )
+
+    def _parse_nmap_file(self, path: str) -> List[Dict[str, Any]]:
+        """Parse an individual Nmap XML file into record dictionaries."""
+
+        tree = ET.parse(path)
+        root = tree.getroot()
+        records: List[Dict[str, Any]] = []
+        file_name = os.path.basename(path)
+        for host in root.findall("host"):
+            records.extend(self._parse_nmap_host(host, file_name))
+        return records
+
+    def _parse_nmap_host(self, host_elem: ET.Element, file_name: str) -> List[Dict[str, Any]]:
+        """Extract port records for a single Nmap host element."""
+
+        addresses = [
+            (addr.get("addr", ""), addr.get("addrtype", ""))
+            for addr in host_elem.findall("address")
+        ]
+        host_ip = ""
+        for value, addr_type in addresses:
+            if addr_type in {"ipv4", "ipv6"} and value:
+                host_ip = value
+                break
+        if not host_ip and addresses:
+            host_ip = addresses[0][0]
+
+        hostnames = [
+            hn.get("name", "")
+            for hn in host_elem.findall("hostnames/hostname")
+            if hn.get("name")
+        ]
+
+        ports_parent = host_elem.find("ports")
+        if ports_parent is None:
+            return []
+
+        records: List[Dict[str, Any]] = []
+        for port_elem in ports_parent.findall("port"):
+            record = self._parse_nmap_port(
+                port_elem,
+                host_ip,
+                hostnames,
+                file_name,
+            )
+            if record:
+                records.append(record)
+        return records
+
+    def _parse_nmap_port(
+        self,
+        port_elem: ET.Element,
+        host: str,
+        hostnames: List[str],
+        file_name: str,
+    ) -> Optional[Dict[str, Any]]:
+        """Extract a dictionary describing a single Nmap port element."""
+
+        port_id = port_elem.get("portid")
+        if not port_id:
+            return None
+
+        try:
+            port: Any = int(port_id)
+        except ValueError:
+            port = port_id
+
+        protocol = port_elem.get("protocol", "")
+        state_elem = port_elem.find("state")
+        state = state_elem.get("state", "") if state_elem is not None else ""
+        reason = state_elem.get("reason", "") if state_elem is not None else ""
+
+        service_elem = port_elem.find("service")
+        service_name = service_elem.get("name", "") if service_elem is not None else ""
+        product = service_elem.get("product", "") if service_elem is not None else ""
+        version = service_elem.get("version", "") if service_elem is not None else ""
+        extrainfo = (
+            service_elem.get("extrainfo", "") if service_elem is not None else ""
+        )
+        cpe = [
+            cpe_elem.text
+            for cpe_elem in port_elem.findall("service/cpe")
+            if cpe_elem.text
+        ]
+
+        scripts = [
+            {
+                "id": script_elem.get("id", ""),
+                "output": script_elem.get("output", ""),
+            }
+            for script_elem in port_elem.findall("script")
+        ]
+
+        host_value = host or (hostnames[0] if hostnames else "")
+
+        return {
+            "host": host_value,
+            "host_ip": host,
+            "hostnames": hostnames,
+            "port": port,
+            "protocol": protocol,
+            "state": state,
+            "reason": reason,
+            "service": service_name,
+            "product": product,
+            "version": version,
+            "extrainfo": extrainfo,
+            "cpe": cpe,
+            "scripts": scripts,
+            "file": file_name,
+        }
+
+    def _update_nmap_state_filter_options(self) -> None:
+        """Refresh the list of available Nmap port states for filtering."""
+
+        states = sorted(
+            {
+                str(record.get("state", "")).lower()
+                for record in self.nmap_records
+                if record.get("state")
+            }
+        )
+        options = ["All states"] + [state for state in states if state]
+        self.nmap_state_options = options
+        if hasattr(self, "nmap_state_combo"):
+            self.nmap_state_combo.configure(values=options)
+            if self.nmap_state_var.get() not in options:
+                self.nmap_state_var.set("All states")
 
     def _build_script_builder_tab(self, parent: tk.Widget) -> None:
         """Initialize widgets used for building scripts."""

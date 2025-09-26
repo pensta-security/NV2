@@ -624,6 +624,10 @@ class NessusViewer(tk.Tk):
         self.script_entry_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.script_entry_tree.configure(yscrollcommand=tree_scrollbar.set)
         tree_scrollbar.configure(command=self.script_entry_tree.yview)
+        self.script_entry_tree.bind(
+            "<<TreeviewSelect>>", self._on_script_builder_selection_changed
+        )
+        self.script_entry_tree.bind("<Delete>", self._on_script_builder_delete)
 
         control_frame = ttk.Frame(parent)
         control_frame.pack(fill=tk.X, padx=5)
@@ -641,6 +645,14 @@ class NessusViewer(tk.Tk):
         )
         self.export_script_button.pack(anchor=tk.W, pady=(0, 5))
         self.export_script_button.state(["disabled"])
+
+        self.remove_script_button = ttk.Button(
+            control_frame,
+            text="Remove Selected",
+            command=self.remove_script_builder_entries,
+        )
+        self.remove_script_button.pack(anchor=tk.W, pady=(0, 5))
+        self.remove_script_button.state(["disabled"])
 
         self.clear_script_button = ttk.Button(
             control_frame,
@@ -744,6 +756,61 @@ class NessusViewer(tk.Tk):
         else:
             self.clear_script_button.state(["disabled"])
             self.export_script_button.state(["disabled"])
+
+        self._on_script_builder_selection_changed()
+
+    def _on_script_builder_selection_changed(
+        self, _event: Optional[tk.Event] = None
+    ) -> None:
+        """Toggle the remove button when rows are selected."""
+
+        if not hasattr(self, "remove_script_button"):
+            return
+
+        if self.script_entry_tree.selection():
+            self.remove_script_button.state(["!disabled"])
+        else:
+            self.remove_script_button.state(["disabled"])
+
+    def _on_script_builder_delete(self, _event: Optional[tk.Event] = None) -> str:
+        """Handle the Delete key press on the script entry table."""
+
+        self.remove_script_builder_entries()
+        return "break"
+
+    def remove_script_builder_entries(self) -> None:
+        """Remove the selected host/port entries from the script builder."""
+
+        selection = self.script_entry_tree.selection()
+        if not selection:
+            return
+
+        entries_to_remove: Set[Tuple[Optional[str], Optional[int]]] = set()
+        for item_id in selection:
+            values = self.script_entry_tree.item(item_id, "values")
+            if not values:
+                continue
+            host_str = values[0] if len(values) > 0 else ""
+            port_str = values[1] if len(values) > 1 else ""
+            host = host_str or None
+            port: Optional[int]
+            if port_str:
+                try:
+                    port = int(port_str)
+                except ValueError:
+                    continue
+            else:
+                port = None
+            entries_to_remove.add((host, port))
+
+        if not entries_to_remove:
+            return
+
+        self.script_entries = [
+            entry for entry in self.script_entries if entry not in entries_to_remove
+        ]
+        self._script_entry_set.difference_update(entries_to_remove)
+        self._update_script_builder_lists()
 
     def add_to_script_builder(
         self, entries: Iterable[Tuple[Optional[str], Optional[int]]]

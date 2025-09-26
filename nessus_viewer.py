@@ -647,6 +647,9 @@ class NessusViewer(tk.Tk):
         self.template_selector.bind(
             "<<ComboboxSelected>>", self._on_script_template_selected
         )
+        self.selected_template_var.trace_add(
+            "write", lambda *_: self._update_template_button_state()
+        )
         ttk.Button(
             selection_frame,
             text="Load",
@@ -671,6 +674,13 @@ class NessusViewer(tk.Tk):
             text="Save Template",
             command=self.save_script_template,
         ).pack(side=tk.LEFT)
+        self.delete_template_button = ttk.Button(
+            save_frame,
+            text="Delete Template",
+            command=self.delete_script_template,
+        )
+        self.delete_template_button.pack(side=tk.LEFT, padx=(5, 0))
+        self.delete_template_button.state(["disabled"])
 
         action_frame = ttk.Frame(parent)
         action_frame.pack(fill=tk.X, padx=5)
@@ -846,17 +856,20 @@ class NessusViewer(tk.Tk):
         self.template_selector["values"] = options
         if self.selected_template_var.get() not in options:
             self.selected_template_var.set("Custom")
+        self._update_template_button_state()
 
     def _on_script_template_selected(self, _event: Optional[tk.Event] = None) -> None:
         """Load the selected template into the editor."""
 
         choice = self.selected_template_var.get()
         if choice == "Custom":
+            self._update_template_button_state()
             return
         template = self.script_templates.get(choice, "")
         self.script_template_text.delete("1.0", tk.END)
         self.script_template_text.insert(tk.END, template)
         self.new_template_name_var.set(choice)
+        self._update_template_button_state()
 
     def save_script_template(self) -> None:
         """Save the current template to the library for future use."""
@@ -895,6 +908,49 @@ class NessusViewer(tk.Tk):
         self._update_template_combobox()
         self._save_config()
         messagebox.showinfo("Template Saved", f"Template '{name}' saved for future use.")
+
+    def delete_script_template(self) -> None:
+        """Remove the selected saved template from the library."""
+
+        choice = self.selected_template_var.get()
+        if choice == "Custom":
+            messagebox.showinfo(
+                "Select Template", "Choose a saved template to delete."
+            )
+            return
+        if choice not in self.script_templates:
+            messagebox.showwarning(
+                "Template Missing",
+                "The selected template could not be found. Please refresh and try again.",
+            )
+            self._update_template_combobox()
+            return
+
+        confirm = messagebox.askyesno(
+            "Delete Template", f"Delete the saved template '{choice}'?"
+        )
+        if not confirm:
+            return
+
+        del self.script_templates[choice]
+        self.selected_template_var.set("Custom")
+        self.new_template_name_var.set("")
+        self._update_template_combobox()
+        self._save_config()
+        messagebox.showinfo(
+            "Template Deleted", f"Template '{choice}' has been removed."
+        )
+
+    def _update_template_button_state(self) -> None:
+        """Enable or disable template actions based on the selection."""
+
+        if not hasattr(self, "delete_template_button"):
+            return
+        choice = self.selected_template_var.get()
+        if choice != "Custom" and choice in self.script_templates:
+            self.delete_template_button.state(["!disabled"])
+        else:
+            self.delete_template_button.state(["disabled"])
 
     def copy_script_output(self) -> None:
         """Copy the generated script to the clipboard."""

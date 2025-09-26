@@ -233,6 +233,7 @@ class NessusViewer(tk.Tk):
             info_frame, text="Copy Ports", command=self.copy_ports
         )
         self.copy_button.pack(anchor=tk.W, padx=5, pady=(0, 5))
+        self.copy_button.state(["disabled"])
 
         menu = tk.Menu(self)
         self.config(menu=menu)
@@ -510,8 +511,10 @@ class NessusViewer(tk.Tk):
         if self.ports:
             ports_sorted = ",".join(str(p) for p in sorted(self.ports))
             self.port_text.insert(tk.END, ports_sorted)
+            self.copy_button.state(["!disabled"])
         else:
             self.port_text.insert(tk.END, "None")
+            self.copy_button.state(["disabled"])
         self.port_text.config(state=tk.DISABLED)
 
     def clear_filter(self) -> None:

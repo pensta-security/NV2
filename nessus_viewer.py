@@ -37,6 +37,11 @@ SEVERITY_NAME_TO_VALUE = {v: k for k, v in SEVERITY_NAMES.items()}
 # Options presented in the severity filter including the default.
 SEVERITY_FILTER_OPTIONS = ["All severities"] + list(SEVERITY_NAMES.values())
 
+# Default templates available when no saved templates exist on disk.
+DEFAULT_SCRIPT_TEMPLATES: Dict[str, str] = {
+    "TestSSL": "testssl.sh --ip <host> --port <port>",
+}
+
 
 class NessusViewer(tk.Tk):
     """Tkinter GUI for viewing one or more Nessus (.nessus) files.
@@ -68,9 +73,7 @@ class NessusViewer(tk.Tk):
         # Script builder state stores host/port pairings and reusable templates.
         self.script_entries: List[Tuple[Optional[str], Optional[int]]] = []
         self._script_entry_set: Set[Tuple[Optional[str], Optional[int]]] = set()
-        self.script_templates: Dict[str, str] = {
-            "TestSSL": "testssl.sh --ip <host> --port <port>"
-        }
+        self.script_templates: Dict[str, str] = dict(DEFAULT_SCRIPT_TEMPLATES)
 
         # Column configuration
         self.columns = ("host", "port", "protocol", "severity", "plugin", "file")
@@ -425,11 +428,14 @@ class NessusViewer(tk.Tk):
                 if isinstance(width, int):
                     self.column_widths[col] = width
 
-            templates = data.get("script_templates", {})
-            if isinstance(templates, dict):
-                for name, template in templates.items():
-                    if isinstance(name, str) and isinstance(template, str):
-                        self.script_templates[name] = template
+            if "script_templates" in data:
+                templates = data.get("script_templates", {})
+                if isinstance(templates, dict):
+                    loaded_templates: Dict[str, str] = {}
+                    for name, template in templates.items():
+                        if isinstance(name, str) and isinstance(template, str):
+                            loaded_templates[name] = template
+                    self.script_templates = loaded_templates
         except (OSError, json.JSONDecodeError):
             pass
 

@@ -22,3 +22,7 @@ Nessus (`.nessus`) and Nmap (`.xml`) files:
   and lists the associated ports. Nessus ports reflect open findings, and the
   Nmap list shows open ports by default (or any state chosen in the Nmap tab).
   Both lists can be copied or sent directly to the Script Builder.
+- The **Checklists** tab lets you maintain penetration testing task lists.
+  Add checklists from built-in templates (web, infrastructure, API, etc.),
+  customise items, track completion/notes, and import/export your workspace as
+  a JSON file for reuse.
